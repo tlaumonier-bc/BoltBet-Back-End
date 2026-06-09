@@ -35,7 +35,7 @@ INSTALLED_APPS = [
     # Local Apps
     'lightning',
     'bets',
-    'accounts',
+    'account',
 ]
 
 MIDDLEWARE = [
