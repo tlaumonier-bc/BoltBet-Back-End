@@ -1,0 +1,13 @@
+#run app
+python manage.py runserver
+
+# pulls live strikes, persists them, broadcasts grid_update
+python manage.py start_lightning_stream
+
+# resolves pending bets, emits bet_resolved
+python manage.py resolve_bets
+
+
+# migrations
+python manage.py makemigrations lightning bets account
+python manage.py migrate

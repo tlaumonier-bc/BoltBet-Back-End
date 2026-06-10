@@ -1,6 +1,6 @@
 import asyncio
 import json
-import time
+import datetime
 import uuid
 import websockets
 import ssl 
@@ -8,6 +8,8 @@ from django.core.management.base import BaseCommand
 from django.utils import timezone
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
+from channels.db import database_sync_to_async
+from lightning.grid import grid_for, multiplier_for, cell_payload
 
 class Command(BaseCommand):
     help = 'Starts the WebSocket client to fetch real-time lightning data'
@@ -117,3 +119,47 @@ class Command(BaseCommand):
                 except Exception as e:
                     self.stdout.write(self.style.ERROR(f"Stream error: {e}"))
                     await asyncio.sleep(2)
+
+    @database_sync_to_async
+    def _persist_and_recompute(self, strike_data):
+        from lightning.models import LightningStrike, GridCell
+        from django.utils import timezone as djtz
+
+        cell_id, lon_min, lat_min = grid_for(strike_data["lat"], strike_data["lon"])
+        ts = datetime.datetime.fromtimestamp(
+            strike_data["timestamp"] / 1000, tz=datetime.timezone.utc
+        )
+
+        LightningStrike.objects.get_or_create(
+            external_id=strike_data["id"],
+            defaults={
+                "lat": strike_data["lat"],
+                "lon": strike_data["lon"],
+                "timestamp": ts,
+                "quality": strike_data["quality"],
+                "grid_cell": cell_id,
+            },
+        )
+
+        now = djtz.now()
+        c1h = LightningStrike.objects.filter(
+            grid_cell=cell_id, timestamp__gte=now - datetime.timedelta(hours=1)
+        ).count()
+        c24h = LightningStrike.objects.filter(
+            grid_cell=cell_id, timestamp__gte=now - datetime.timedelta(hours=24)
+        ).count()
+
+        cell, _ = GridCell.objects.update_or_create(
+            cell_id=cell_id,
+            defaults={
+                "lon_min": lon_min,
+                "lat_min": lat_min,
+                "strike_count_1h": c1h,
+                "strike_count_24h": c24h,
+                "multiplier": multiplier_for(c1h),
+            },
+        )
+        return cell_payload(cell)
+
+
+
