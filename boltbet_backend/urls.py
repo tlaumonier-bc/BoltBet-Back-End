@@ -19,7 +19,7 @@ from django.urls import path, include
 from django.http import HttpResponse
 from rest_framework.routers import DefaultRouter
 
-from lightning.views import GridCellViewSet, LightningStrikeViewSet
+from lightning.views import GridCellViewSet, LightningStrikeViewSet, strike_count
 from bets.views import create_bet, leaderboard
 
 
@@ -35,6 +35,7 @@ router.register(r"strikes", LightningStrikeViewSet)
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("healthz/", healthz),
+    path("api/strikes/count/", strike_count), 
     path("api/", include(router.urls)),
     path("api/bets/", create_bet),
     path("api/leaderboard/", leaderboard),
