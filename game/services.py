@@ -29,6 +29,7 @@ LOCK_SECONDS = int(os.environ.get("GAME_LOCK_SECONDS", "5"))
 SCORE_GRACE_SECONDS = int(os.environ.get("GAME_SCORE_GRACE_SECONDS", "6"))
 MIN_GAMES_FOR_AVG = int(os.environ.get("LEADERBOARD_MIN_GAMES", "5"))
 LEADERBOARD_LIMIT = int(os.environ.get("LEADERBOARD_LIMIT", "20"))
+INTERMISSION_SECONDS = int(os.environ.get("GAME_INTERMISSION_SECONDS", "10"))
 
 
 class PickError(Exception):
@@ -60,7 +61,7 @@ def close_round(rnd: GameRound, now=None):
     now = now or timezone.now()
 
     for pick in Pick.objects.filter(round=rnd, finalized=False).select_related("round", "user").iterator():
-        _finalize_pick(pick)
+        _score_pick(pick, now, force_final=True)
 
     rnd.status = "finished"
     rnd.save(update_fields=["status"])
@@ -98,44 +99,67 @@ def place_pick(user, zone_id, now=None) -> Pick:
 
     # Clamp the lock to the round end so every pick finalizes within this round.
     expires = min(now + dt.timedelta(seconds=LOCK_SECONDS), rnd.ends_at)
-    return Pick.objects.create(
+    pick = Pick.objects.create(
         round=rnd, user=user, zone_id=zone_id,
         lon_min=lon_min, lon_max=lon_max, lat_min=lat_min, lat_max=lat_max,
         locked_at=now, expires_at=expires,
     )
+    # Put the player on the live board at 0 immediately, before they score.
+    RoundResult.objects.get_or_create(round_id=rnd.id, user_id=user.id)
+    return pick
 
 
-def _count_for_pick(pick: Pick) -> int:
+def _strikes_in(pick: Pick, upper) -> int:
+    if upper <= pick.locked_at:
+        return 0
     return LightningStrike.objects.filter(
-        timestamp__gte=pick.locked_at,
-        timestamp__lt=pick.expires_at,
+        # received_at = when we ingested/broadcast the strike, i.e. when it was
+        # drawn on the globe. Same wall clock as locked_at/expires_at, so the
+        # count matches what the player watched land in the zone. (Scoring on the
+        # feed's event `timestamp` undercounts, because strikes arrive a few
+        # seconds after the event they describe.)
+        received_at__gte=pick.locked_at,
+        received_at__lt=upper,
         lat__gte=pick.lat_min, lat__lt=pick.lat_max,
         lon__gte=pick.lon_min, lon__lt=pick.lon_max,
     ).count()
 
 
 @transaction.atomic
-def _finalize_pick(pick: Pick) -> int:
-    captured = _count_for_pick(pick)
-    pick.strikes_captured = captured
-    pick.finalized = True
-    pick.save(update_fields=["strikes_captured", "finalized"])
-    result, _ = RoundResult.objects.get_or_create(round_id=pick.round_id, user_id=pick.user_id)
-    if captured:
-        RoundResult.objects.filter(pk=result.pk).update(points=F("points") + captured)
-    get_live_board().incr(pick.round, pick.user_id, captured)
-    return captured
+def _score_pick(pick: Pick, now, force_final: bool = False) -> int:
+    """
+    Idempotent, delta-based scoring. Recomputes the pick's captured count up to
+    min(now, expires_at) and adds only the INCREASE since the last pass, so the
+    live board climbs ~once per tick instead of in one lump — and re-running can
+    never double count. Finalizes once the window + grace has elapsed.
+    """
+    window_end = min(now, pick.expires_at)
+    new_count = _strikes_in(pick, window_end)
+    delta = new_count - pick.strikes_captured
+    fields = []
+    if delta > 0:
+        pick.strikes_captured = new_count
+        fields.append("strikes_captured")
+        result, _ = RoundResult.objects.get_or_create(round_id=pick.round_id, user_id=pick.user_id)
+        RoundResult.objects.filter(pk=result.pk).update(points=F("points") + delta)
+        get_live_board().incr(pick.round, pick.user_id, delta)
+    done = force_final or now >= pick.expires_at + dt.timedelta(seconds=SCORE_GRACE_SECONDS)
+    if done and not pick.finalized:
+        pick.finalized = True
+        fields.append("finalized")
+    if fields:
+        pick.save(update_fields=fields)
+    return delta
 
 
-def finalize_due_picks(now=None) -> int:
-    """Score every pick whose window + grace has elapsed. Returns how many."""
+def score_picks(now=None) -> bool:
+    """Score every not-yet-finalized pick this tick. Returns True if anything changed."""
     now = now or timezone.now()
-    cutoff = now - dt.timedelta(seconds=SCORE_GRACE_SECONDS)
-    n = 0
-    for pick in Pick.objects.filter(finalized=False, expires_at__lte=cutoff).select_related("round", "user").iterator():
-        _finalize_pick(pick)
-        n += 1
-    return n
+    changed = False
+    for pick in Pick.objects.filter(finalized=False).select_related("round", "user").iterator():
+        if _score_pick(pick, now) > 0:
+            changed = True
+    return changed
 
 
 # ----------------------------- leaderboards ----------------------------------

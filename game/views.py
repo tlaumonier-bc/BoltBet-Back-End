@@ -1,10 +1,12 @@
+from datetime import timedelta
+
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from . import services
-from .models import PlayerStats
+from .models import GameRound, PlayerStats
 
 User = get_user_model()
 
@@ -26,16 +28,28 @@ def _player(request, username=None):
 def game_state(request):
     rnd = services.get_active_round()
     now = timezone.now()
-    if not rnd:
-        return Response({"active": False, "server_time": now.isoformat()})
-    return Response({
-        "active": True,
-        "round_number": rnd.number,
-        "ends_at": rnd.ends_at.isoformat(),
-        "server_time": now.isoformat(),          # client computes remaining = ends_at - server_time
-        "duration_seconds": rnd.duration_seconds,
-        "lock_seconds": services.LOCK_SECONDS,
-    })
+    if rnd:
+        return Response({
+            "active": True,
+            "round_number": rnd.number,
+            "ends_at": rnd.ends_at.isoformat(),
+            "server_time": now.isoformat(),       # client computes remaining = ends_at - server_time
+            "duration_seconds": rnd.duration_seconds,
+            "lock_seconds": services.LOCK_SECONDS,
+        })
+
+    # No active round — are we in the intermission buffer between games?
+    last = GameRound.objects.order_by("-number").first()
+    if last and last.status == "finished":
+        next_at = last.ends_at + timedelta(seconds=services.INTERMISSION_SECONDS)
+        if now < next_at:
+            return Response({
+                "active": False,
+                "intermission": True,
+                "next_round_at": next_at.isoformat(),
+                "server_time": now.isoformat(),
+            })
+    return Response({"active": False, "server_time": now.isoformat()})
 
 
 @api_view(["POST"])
