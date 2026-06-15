@@ -54,6 +54,7 @@ INSTALLED_APPS = [
     'lightning',
     'bets',
     'account',
+    'game'
 ]
 
 MIDDLEWARE = [

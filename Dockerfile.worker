@@ -1,0 +1,17 @@
+FROM eu.gcr.io/blockchain-internal/v1/blockchain_python_3_13_build:latest AS builder
+
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+FROM eu.gcr.io/blockchain-internal/v1/blockchain_python_3_13:latest
+
+WORKDIR /app
+COPY --from=builder /install /usr/local
+COPY . .
+
+USER blockchain          # CONFIRM: same as api
+
+# No EXPOSE: the worker has no HTTP port.
+# Runs the lightning stream; bet-resolution loop will live inside this command later.
+CMD ["python", "manage.py", "start_lightning_stream"]

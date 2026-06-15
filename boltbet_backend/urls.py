@@ -19,8 +19,11 @@ from django.urls import path, include
 from django.http import HttpResponse
 from rest_framework.routers import DefaultRouter
 
-from lightning.views import GridCellViewSet, LightningStrikeViewSet, strike_count
-from bets.views import create_bet, leaderboard
+from game.views import (
+    game_state, place_pick,
+    leaderboard_current, leaderboard_wins, leaderboard_average,
+)
+from lightning.views import strike_stats 
 
 
 def healthz(request):
@@ -29,14 +32,12 @@ def healthz(request):
 
 
 router = DefaultRouter()
-router.register(r"cells", GridCellViewSet)
-router.register(r"strikes", LightningStrikeViewSet)
 
 urlpatterns = [
-    path("admin/", admin.site.urls),
-    path("healthz/", healthz),
-    path("api/strikes/count/", strike_count), 
-    path("api/", include(router.urls)),
-    path("api/bets/", create_bet),
-    path("api/leaderboard/", leaderboard),
+    path("api/game/state/", game_state),
+    path("api/game/pick/", place_pick),
+    path("api/game/leaderboard/current/", leaderboard_current),
+    path("api/game/leaderboard/wins/", leaderboard_wins),
+    path("api/game/leaderboard/average/", leaderboard_average),
+    path("api/stats/strikes/", strike_stats),
 ]
