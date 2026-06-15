@@ -85,7 +85,6 @@ class Command(BaseCommand):
             await self._flush()
 
     async def _listen(self):
-        uri = "wss://ws1.blitzortung.org/"
         channel_layer = get_channel_layer()
         headers = {
             "Origin": "https://map.blitzortung.org",
@@ -98,60 +97,77 @@ class Command(BaseCommand):
         ssl_context.check_hostname = False
         ssl_context.verify_mode = ssl.CERT_NONE
 
-        async with websockets.connect(uri, additional_headers=headers, ssl=ssl_context) as ws:
-            await ws.send(json.dumps({"a": 111}))
-            self.stdout.write("Connected to external lightning stream! Waiting for strikes...")
+        servers = [
+            "wss://ws1.blitzortung.org/",
+            "wss://ws7.blitzortung.org/",
+            "wss://ws8.blitzortung.org/",
+        ]
+        backoff = 1
+        attempt = 0
 
-            while True:
-                try:
-                    message = await ws.recv()
-                    try:
-                        data = json.loads(self.decode_lzw(message))
-                        lat, lon = data.get("lat"), data.get("lon")
-                        if lat is None or lon is None:
-                            continue
+        while True:  # reconnect forever
+            uri = servers[attempt % len(servers)]
+            try:
+                async with websockets.connect(
+                    uri,
+                    additional_headers=headers,
+                    ssl=ssl_context,
+                    ping_interval=20,   # keepalive so idle conns aren't reaped
+                    ping_timeout=20,
+                    close_timeout=5,
+                ) as ws:
+                    await ws.send(json.dumps({"a": 111}))
+                    self.stdout.write(f"Connected to {uri}! Waiting for strikes...")
+                    backoff = 1  # reset only after a successful connect
 
-                        event_ms = int(data.get("time", 0) / 1_000_000)  # ns -> ms
-                        received_ms = int(time.time() * 1000)
-                        stations = len(data.get("sig", []))
-                        quality = "good" if stations >= 10 else "medium" if stations >= 5 else "bad"
+                    async for message in ws:   # raises ConnectionClosed when dropped
+                        try:
+                            data = json.loads(self.decode_lzw(message))
+                            lat, lon = data.get("lat"), data.get("lon")
+                            if lat is None or lon is None:
+                                continue
 
-                        strike = {
-                            "id": str(uuid.uuid4()),
-                            "lat": lat,
-                            "lon": lon,
-                            "event_ms": event_ms,
-                            "received_ms": received_ms,
-                            "quality": quality,
-                        }
+                            event_ms = int(data.get("time", 0) / 1_000_000)
+                            received_ms = int(time.time() * 1000)
+                            stations = len(data.get("sig", []))
+                            quality = "good" if stations >= 10 else "medium" if stations >= 5 else "bad"
 
-                        # 1) live broadcast (frontend strike shape, unchanged)
-                        await channel_layer.group_send(
-                            "lightning_group",
-                            {"type": "broadcast_message", "message": {
-                                "type": "strike",
-                                "id": strike["id"],
-                                "lat": lat,
-                                "lon": lon,
-                                "timestamp": event_ms,
+                            strike = {
+                                "id": str(uuid.uuid4()),
+                                "lat": lat, "lon": lon,
+                                "event_ms": event_ms,
+                                "received_ms": received_ms,
                                 "quality": quality,
-                            }},
-                        )
+                            }
 
-                        # 2) buffer for persistence
-                        self._buffer.append(strike)
-                        if len(self._buffer) >= MAX_BUFFER:
-                            await self._flush()
+                            await channel_layer.group_send(
+                                "lightning_group",
+                                {"type": "broadcast_message", "message": {
+                                    "type": "strike", "id": strike["id"],
+                                    "lat": lat, "lon": lon,
+                                    "timestamp": event_ms, "quality": quality,
+                                }},
+                            )
 
-                    except Exception:
-                        pass  # ignore keep-alives / unparseable frames
+                            self._buffer.append(strike)
+                            if len(self._buffer) >= MAX_BUFFER:
+                                await self._flush()
 
-                except websockets.exceptions.ConnectionClosed as e:
-                    self.stdout.write(self.style.ERROR(f"Connection closed by server: {e}"))
-                    break
-                except Exception as e:
-                    self.stdout.write(self.style.ERROR(f"Stream error: {e}"))
-                    await asyncio.sleep(2)
+                        except Exception:
+                            pass  # keep-alives / unparseable frames
+
+            except (websockets.exceptions.ConnectionClosed, OSError, asyncio.TimeoutError) as e:
+                self.stdout.write(self.style.WARNING(
+                    f"Disconnected ({e!r}); reconnecting in {backoff}s..."
+                ))
+            except Exception as e:
+                self.stdout.write(self.style.ERROR(
+                    f"Stream error ({e!r}); reconnecting in {backoff}s..."
+                ))
+
+            attempt += 1
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 30)  # exponential backoff, capped at 30s
 
     async def _flush(self):
         if not self._buffer:
