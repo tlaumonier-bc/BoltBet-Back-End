@@ -1,6 +1,6 @@
 """URL configuration for boltbet_backend."""
 from django.contrib import admin
-from django.urls import path
+from django.urls import include, path
 from django.http import HttpResponse
 
 from game.views import (
@@ -16,16 +16,22 @@ def healthz(request):
     return HttpResponse("ok", content_type="text/plain", status=200)
 
 
+# Public REST API. Mounted under both /api/ and /public/api/ so it works whether
+# or not the ingress strips the /public prefix before the request reaches us.
+api_urlpatterns = [
+    path("game/state/", game_state),
+    path("game/pick/", place_pick),
+    path("game/leaderboard/current/", leaderboard_current),
+    path("game/leaderboard/wins/", leaderboard_wins),
+    path("game/leaderboard/average/", leaderboard_average),
+    path("stats/strikes/", strike_stats),
+    path("bets/", create_bet),
+]
+
 urlpatterns = [
     path("healthz", healthz),
     path("admin/", admin.site.urls),
 
-    path("api/game/state/", game_state),
-    path("api/game/pick/", place_pick),
-    path("api/game/leaderboard/current/", leaderboard_current),
-    path("api/game/leaderboard/wins/", leaderboard_wins),
-    path("api/game/leaderboard/average/", leaderboard_average),
-
-    path("api/stats/strikes/", strike_stats),
-    path("api/bets/", create_bet),
+    path("api/", include(api_urlpatterns)),
+    path("public/api/", include(api_urlpatterns)),
 ]
