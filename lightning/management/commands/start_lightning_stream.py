@@ -181,17 +181,28 @@ class Command(BaseCommand):
     @database_sync_to_async
     def _persist(self, batch):
         from django.db import connection
-        from lightning.models import LightningStrike
+        from lightning.models import LightningStrike, CountryStrike
         from lightning.grid import rollup_cell_for
+        from lightning.geo import country_for_batch
+
+        # One batched lat/lon -> country lookup for the whole flush.
+        countries = country_for_batch([(s["lat"], s["lon"]) for s in batch])
 
         objs = []
+        country_objs = []
         rollups = {}  # (bucket, cell_id) -> [count, good, medium, bad, lat_sum, lat_n]
 
-        for s in batch:
+        for s, cc in zip(batch, countries):
             ts = dt.datetime.fromtimestamp(s["event_ms"] / 1000, tz=dt.timezone.utc)
             recv = dt.datetime.fromtimestamp(s["received_ms"] / 1000, tz=dt.timezone.utc)
+
             objs.append(LightningStrike(
                 external_id=s["id"], lat=s["lat"], lon=s["lon"],
+                timestamp=ts, received_at=recv, quality=s["quality"],
+            ))
+
+            country_objs.append(CountryStrike(
+                country=cc, lat=s["lat"], lon=s["lon"],
                 timestamp=ts, received_at=recv, quality=s["quality"],
             ))
 
@@ -205,10 +216,14 @@ class Command(BaseCommand):
             r[5] += 1
 
         LightningStrike.objects.bulk_create(objs, ignore_conflicts=True)
+        CountryStrike.objects.bulk_create(country_objs)
 
         if rollups:
             with connection.cursor() as cur:
                 for (bucket, cell_id), (cnt, g, m, b, lsum, ln) in rollups.items():
                     cur.execute(ROLLUP_UPSERT, [bucket, cell_id, cnt, g, m, b, lsum, ln])
 
-        self.stdout.write(f"flushed {len(objs)} strikes, {len(rollups)} rollup cells")
+        self.stdout.write(
+            f"flushed {len(objs)} strikes, {len(country_objs)} country rows, "
+            f"{len(rollups)} rollup cells"
+        )

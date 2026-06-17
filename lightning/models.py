@@ -57,3 +57,26 @@ class StrikeRollupMinute(models.Model):
 
     def __str__(self):
         return f"{self.bucket:%Y-%m-%d %H:%M} {self.cell_id}: {self.count}"
+    
+
+class CountryStrike(models.Model):
+    """
+    Retained, per-country rolling window of recent strikes (target: newest
+    ~1000 per country). Unlike LightningStrike, this table is NOT purged, so
+    the 'last 1000 per country' endpoint works even for countries that haven't
+    seen a strike in years. Populated at ingest from lat/lon.
+    """
+    country = models.CharField(max_length=2, db_index=True)  # ISO alpha-2, 'XX' if unknown
+    lat = models.FloatField()
+    lon = models.FloatField()
+    timestamp = models.DateTimeField()
+    received_at = models.DateTimeField()
+    quality = models.CharField(max_length=20)
+
+    class Meta:
+        indexes = [models.Index(fields=["country", "-received_at"])]
+
+    def __str__(self):
+        return f"{self.country} {self.lat},{self.lon}"
+
+

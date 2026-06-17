@@ -7,7 +7,7 @@ from game.views import (
     game_state, place_pick,
     leaderboard_current, leaderboard_wins, leaderboard_average,
 )
-from lightning.views import strike_stats
+from lightning.views import country_strikes, recent_strikes, strikes_per_minute
 from bets.views import create_bet
 
 
@@ -24,8 +24,10 @@ api_urlpatterns = [
     path("game/leaderboard/current/", leaderboard_current),
     path("game/leaderboard/wins/", leaderboard_wins),
     path("game/leaderboard/average/", leaderboard_average),
-    path("stats/strikes/", strike_stats),
     path("bets/", create_bet),
+    path("strikes/by-country/", country_strikes),
+    path("strikes/recent/", recent_strikes),
+    path("strikes/per-minute/", strikes_per_minute),
 ]
 
 urlpatterns = [
