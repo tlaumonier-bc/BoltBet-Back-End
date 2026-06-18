@@ -113,6 +113,9 @@ else:
         }
     }
 
+CONN_MAX_AGE = int(os.environ.get("DJANGO_CONN_MAX_AGE", "60"))
+CONN_HEALTH_CHECKS = True
+
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [
     {

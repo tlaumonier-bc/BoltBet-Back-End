@@ -22,6 +22,7 @@ from asgiref.sync import sync_to_async
 from channels.db import database_sync_to_async
 from channels.layers import get_channel_layer
 from django.core.management.base import BaseCommand
+from django.db import close_old_connections
 
 FLUSH_INTERVAL_S = 1.0
 MAX_BUFFER = 2000  # safety cap between flushes
@@ -189,9 +190,17 @@ class Command(BaseCommand):
             await self._persist(batch)
         except Exception as e:
             self.stdout.write(self.style.ERROR(f"flush error ({len(batch)} strikes dropped): {e}"))
+            # Drop a stale/broken DB connection so the next flush reconnects
+            # instead of failing forever on a dead socket.
+            await sync_to_async(close_old_connections)()
 
     @database_sync_to_async
     def _persist(self, batch):
+        # Recycle an expired/unhealthy connection before using it. With
+        # CONN_HEALTH_CHECKS=True this drops a dead socket instead of failing
+        # on it (the bug that silently froze all writes).
+        close_old_connections()
+
         from django.db import connection
         from lightning.models import LightningStrike, CountryStrike
         from lightning.grid import rollup_cell_for
@@ -224,13 +233,25 @@ class Command(BaseCommand):
             r[4] += latency_ms
             r[5] += 1
 
-        LightningStrike.objects.bulk_create(objs, ignore_conflicts=True)
-        CountryStrike.objects.bulk_create(country_objs)
+        # Three INDEPENDENT write paths. Each is isolated so one failing can't
+        # block the others (e.g. a rollup upsert error must not stop raw writes).
+        try:
+            LightningStrike.objects.bulk_create(objs, ignore_conflicts=True)
+        except Exception as e:
+            self.stdout.write(self.style.ERROR(f"raw write failed: {e}"))
+
+        try:
+            CountryStrike.objects.bulk_create(country_objs, ignore_conflicts=True)
+        except Exception as e:
+            self.stdout.write(self.style.ERROR(f"country write failed: {e}"))
 
         if rollups:
-            with connection.cursor() as cur:
-                for (bucket, cell_id), (cnt, g, m, b, lsum, ln) in rollups.items():
-                    cur.execute(ROLLUP_UPSERT, [bucket, cell_id, cnt, g, m, b, lsum, ln])
+            try:
+                with connection.cursor() as cur:
+                    for (bucket, cell_id), (cnt, g, m, b, lsum, ln) in rollups.items():
+                        cur.execute(ROLLUP_UPSERT, [bucket, cell_id, cnt, g, m, b, lsum, ln])
+            except Exception as e:
+                self.stdout.write(self.style.ERROR(f"rollup write failed: {e}"))
 
         self.stdout.write(
             f"flushed {len(objs)} strikes, {len(country_objs)} country rows, "
