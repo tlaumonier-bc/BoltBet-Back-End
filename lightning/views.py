@@ -13,20 +13,28 @@ from .models import StrikeRollupMinute, LightningStrike, CountryStrike
 @api_view(["GET"])
 def recent_strikes(request):
     """
-    Bullet 2 — raw strike positions in the world over a recent window.
-      ?minutes=10  (also use 30, 60)
-      ?limit=5000  (hard ceiling 10000)
-    Returns a flat list of points, newest first.
+    Raw strike positions, newest first.
+      ?minutes=60       older bound: strikes received in the last N minutes
+      ?older_than=0     younger bound: exclude strikes newer than this many minutes.
+                        Combine the two to get a NON-overlapping age band, e.g.
+                        minutes=360&older_than=60  -> strikes 1–6 hours old.
+      ?limit=5000       hard ceiling 10000
     """
     minutes = int(request.GET.get("minutes", 10))
+    older_than = int(request.GET.get("older_than", 0))
     limit = min(int(request.GET.get("limit", 5000)), 10000)
-    since = timezone.now() - timedelta(minutes=minutes)
-    qs = (LightningStrike.objects
-          .filter(received_at__gte=since)
-          .order_by("-received_at")
-          .values("lat", "lon", "quality", "timestamp", "received_at")[:limit])
+    now = timezone.now()
+    since = now - timedelta(minutes=minutes)
+
+    qs = LightningStrike.objects.filter(received_at__gte=since)
+    if older_than > 0:
+        qs = qs.filter(received_at__lt=now - timedelta(minutes=older_than))
+    qs = (qs.order_by("-received_at")
+            .values("lat", "lon", "quality", "timestamp", "received_at")[:limit])
+
     return Response({
         "minutes": minutes,
+        "older_than": older_than,
         "count": len(qs),          # number actually returned (may hit the cap)
         "strikes": list(qs),
     })
@@ -35,13 +43,12 @@ def recent_strikes(request):
 @api_view(["GET"])
 def strikes_per_minute(request):
     """
-    Bullet 3 — global strike count grouped by minute over the last 15 minutes.
+    Global strike count grouped by minute over the last 15 minutes.
     Reads the per-minute rollups, so it never scans raw strikes.
     Returns one entry per minute bucket, oldest first, zero-filled.
     """
     minutes = int(request.GET.get("minutes", 15))
     now = timezone.now()
-    # Align the floor to the start of the current minute so buckets line up.
     current_min = now.replace(second=0, microsecond=0)
     since = current_min - timedelta(minutes=minutes - 1)
 
@@ -51,7 +58,6 @@ def strikes_per_minute(request):
             .annotate(n=Sum("count")))
     by_bucket = {r["bucket"].replace(second=0, microsecond=0): r["n"] for r in rows}
 
-    # Zero-fill every minute in the window so the frontend gets a continuous series.
     series = []
     for i in range(minutes):
         b = since + timedelta(minutes=i)
@@ -78,7 +84,6 @@ def country_strikes(request):
                 .values("lat", "lon", "timestamp", "quality", "received_at")[:limit])
         return Response({country.upper(): list(rows)})
 
-    # All countries: top-N per country via window function (SQLite 3.25+ / Postgres).
     sql = """
         SELECT country, lat, lon, timestamp, quality, received_at FROM (
             SELECT country, lat, lon, timestamp, quality, received_at,

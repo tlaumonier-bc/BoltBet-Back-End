@@ -1,6 +1,6 @@
 """
 Live ingest worker. Connects to Blitzortung, decodes the feed, and:
-  1. broadcasts each strike to the globe (unchanged behaviour), and
+  1. broadcasts each strike to the globe (now WITH its country), and
   2. buffers strikes and flushes them to Postgres every ~1s:
        - bulk INSERT into LightningStrike (dedup on external_id),
        - increment the per-minute StrikeRollupMinute counters (ON CONFLICT).
@@ -42,7 +42,7 @@ ON CONFLICT (bucket, cell_id) DO UPDATE SET
 
 
 class Command(BaseCommand):
-    help = "Stream live lightning, broadcast it, and persist + roll it up."
+    help = "Stream live lightning, broadcast it (with country), and persist + roll it up."
 
     def __init__(self, *a, **kw):
         super().__init__(*a, **kw)
@@ -50,6 +50,10 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         self.stdout.write(self.style.SUCCESS("Starting live lightning stream worker..."))
+        # Warm the offline reverse-geocoder once (loads its dataset) so the first
+        # per-strike country lookup in the live loop is instant, not a 1-2s stall.
+        from lightning.geo import country_for_batch
+        country_for_batch([(0.0, 0.0)])
         asyncio.run(self._run())
 
     # ---- Blitzortung custom LZW (unchanged) ----
@@ -85,6 +89,8 @@ class Command(BaseCommand):
             await self._flush()
 
     async def _listen(self):
+        from lightning.geo import country_for_batch
+
         channel_layer = get_channel_layer()
         headers = {
             "Origin": "https://map.blitzortung.org",
@@ -132,12 +138,17 @@ class Command(BaseCommand):
                             stations = len(data.get("sig", []))
                             quality = "good" if stations >= 10 else "medium" if stations >= 5 else "bad"
 
+                            # Offline reverse-geocode this strike once. Reused for the
+                            # live broadcast AND for persistence (no double lookup).
+                            cc = country_for_batch([(lat, lon)])[0]
+
                             strike = {
                                 "id": str(uuid.uuid4()),
                                 "lat": lat, "lon": lon,
                                 "event_ms": event_ms,
                                 "received_ms": received_ms,
                                 "quality": quality,
+                                "country": cc,
                             }
 
                             await channel_layer.group_send(
@@ -146,6 +157,7 @@ class Command(BaseCommand):
                                     "type": "strike", "id": strike["id"],
                                     "lat": lat, "lon": lon,
                                     "timestamp": event_ms, "quality": quality,
+                                    "country": cc,
                                 }},
                             )
 
@@ -183,18 +195,15 @@ class Command(BaseCommand):
         from django.db import connection
         from lightning.models import LightningStrike, CountryStrike
         from lightning.grid import rollup_cell_for
-        from lightning.geo import country_for_batch
-
-        # One batched lat/lon -> country lookup for the whole flush.
-        countries = country_for_batch([(s["lat"], s["lon"]) for s in batch])
 
         objs = []
         country_objs = []
         rollups = {}  # (bucket, cell_id) -> [count, good, medium, bad, lat_sum, lat_n]
 
-        for s, cc in zip(batch, countries):
+        for s in batch:
             ts = dt.datetime.fromtimestamp(s["event_ms"] / 1000, tz=dt.timezone.utc)
             recv = dt.datetime.fromtimestamp(s["received_ms"] / 1000, tz=dt.timezone.utc)
+            cc = s.get("country", "XX")  # already resolved at ingest
 
             objs.append(LightningStrike(
                 external_id=s["id"], lat=s["lat"], lon=s["lon"],
