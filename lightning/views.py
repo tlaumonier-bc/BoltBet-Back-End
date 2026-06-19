@@ -8,6 +8,7 @@ from django.utils import timezone
 from django.db import connection
 from django.db.models import Sum
 from django.core.cache import cache
+from django.http import HttpResponse, JsonResponse
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from .models import StrikeRollupMinute, LightningStrike, CountryStrike
@@ -112,6 +113,9 @@ def country_strikes(request):
 
 OWM_KEY = os.environ.get("OWM_API_KEY")  # server-only, NO NEXT_PUBLIC_
 
+# Allowlist so the proxy can't be abused to fetch arbitrary OWM layers/paths.
+OWM_TILE_LAYERS = {"clouds_new", "precipitation_new", "temp_new", "wind_new"}
+
 
 @api_view(["GET"])
 def weather_now(request):
@@ -147,3 +151,57 @@ def weather_now(request):
     }
     cache.set(ckey, out, 300)  # 5 min
     return Response(out)
+
+
+def weather_tile(request, layer, z, x, y):
+    """
+    Server-side proxy for OpenWeatherMap raster tiles. The OWM key stays on the
+    server (env OWM_API_KEY) and is never shipped to the browser. Tiles are
+    cached server-side (10 min) and marked cacheable for the browser/CDN.
+
+    GET /api/weather/tiles/<layer>/<z>/<x>/<y>.png
+    """
+    if not OWM_KEY:
+        return JsonResponse({"error": "owm_key_unset"}, status=503)
+    if layer not in OWM_TILE_LAYERS:
+        return JsonResponse({"error": "bad_layer"}, status=400)
+
+    ckey = f"owmtile:{layer}:{z}:{x}:{y}"
+    data = cache.get(ckey)
+    if data is None:
+        url = f"https://tile.openweathermap.org/map/{layer}/{z}/{x}/{y}.png?appid={OWM_KEY}"
+        try:
+            with urllib.request.urlopen(url, timeout=8) as r:
+                data = r.read()
+        except Exception:
+            return JsonResponse({"error": "owm_tile_failed"}, status=502)
+        cache.set(ckey, data, 600)  # 10 min
+
+    resp = HttpResponse(data, content_type="image/png")
+    resp["Cache-Control"] = "public, max-age=600"
+    return resp
+
+
+@api_view(["GET"])
+def strikes_count(request):
+    """
+    Strike count inside a lat/lon bounding box over the last `minutes`.
+    Consumed by components/map/LightningMap2D.tsx.
+    ?min_lat= &max_lat= &min_lon= &max_lon= &minutes=60
+    """
+    try:
+        min_lat = float(request.GET["min_lat"])
+        max_lat = float(request.GET["max_lat"])
+        min_lon = float(request.GET["min_lon"])
+        max_lon = float(request.GET["max_lon"])
+    except (KeyError, ValueError):
+        return Response({"error": "bbox_required"}, status=400)
+
+    minutes = int(request.GET.get("minutes", 60))
+    since = timezone.now() - timedelta(minutes=minutes)
+    count = LightningStrike.objects.filter(
+        received_at__gte=since,
+        lat__gte=min_lat, lat__lte=max_lat,
+        lon__gte=min_lon, lon__lte=max_lon,
+    ).count()
+    return Response({"count": count})

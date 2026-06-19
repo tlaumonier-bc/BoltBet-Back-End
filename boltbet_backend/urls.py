@@ -7,8 +7,16 @@ from game.views import (
     game_state, place_pick,
     leaderboard_current, leaderboard_wins, leaderboard_average,
 )
-from lightning.views import country_strikes, recent_strikes, strikes_per_minute, weather_now
+from lightning.views import (
+    country_strikes, recent_strikes, strikes_per_minute,
+    weather_now, weather_tile, strikes_count,
+)
 from bets.views import create_bet
+from account.views import (
+    username_available, register, profile,
+    place_bet, bet_result, claim_tokens, leaderboard,
+)
+from account.oauth import oauth_start, oauth_callback
 
 
 def healthz(request):
@@ -19,16 +27,38 @@ def healthz(request):
 # Public REST API. Mounted under both /api/ and /public/api/ so it works whether
 # or not the ingress strips the /public prefix before the request reaches us.
 api_urlpatterns = [
+    # --- Legacy zone game (unused by the current frontend; kept for compat) ---
     path("game/state/", game_state),
     path("game/pick/", place_pick),
     path("game/leaderboard/current/", leaderboard_current),
     path("game/leaderboard/wins/", leaderboard_wins),
     path("game/leaderboard/average/", leaderboard_average),
     path("bets/", create_bet),
+
+    # --- Strike feeds ---
     path("strikes/by-country/", country_strikes),
     path("strikes/recent/", recent_strikes),
     path("strikes/per-minute/", strikes_per_minute),
+    path("strikes/count/", strikes_count),
+
+    # --- Weather (server-side OWM key) ---
     path("weather/now/", weather_now),
+    path("weather/tiles/<str:layer>/<int:z>/<int:x>/<int:y>.png", weather_tile),
+
+    # --- Up/Down game: identity ---
+    path("game/username/", username_available),
+    path("game/register/", register),
+    path("game/profile/", profile),
+
+    # --- Up/Down game: play ---
+    path("game/bet/", place_bet),
+    path("game/bet/<int:bet_id>/result/", bet_result),
+    path("game/claim/", claim_tokens),
+    path("game/leaderboard/", leaderboard),
+
+    # --- OAuth (Google to start; extensible) ---
+    path("auth/<str:provider>/start/", oauth_start),
+    path("auth/<str:provider>/callback/", oauth_callback),
 ]
 
 urlpatterns = [
