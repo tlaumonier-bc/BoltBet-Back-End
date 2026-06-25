@@ -1,5 +1,5 @@
 # API + WebSocket server (ASGI)
-daphne -b 0.0.0.0 -p ${PORT:-8000} lightning_map_game_backend.asgi:application
+daphne -b 0.0.0.0 -p ${PORT:-8000} boltbet_backend.asgi:application
 # or, for local dev:
 python manage.py runserver
 

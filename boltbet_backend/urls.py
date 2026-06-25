@@ -1,4 +1,4 @@
-"""URL configuration for lightning_map_game_backend."""
+"""URL configuration for boltbet_backend."""
 from django.contrib import admin
 from django.urls import include, path
 from django.http import HttpResponse

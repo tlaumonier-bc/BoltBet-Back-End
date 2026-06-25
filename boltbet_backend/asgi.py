@@ -1,7 +1,7 @@
 import os
 from django.core.asgi import get_asgi_application
 
-os.environ.setdefault("DJANGO_SETTINGS_MODULE", "lightning_map_game_backend.settings")
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "boltbet_backend.settings")
 
 # Initialise the Django app registry BEFORE importing anything that touches models.
 django_asgi_app = get_asgi_application()

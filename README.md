@@ -30,7 +30,7 @@ pip install -r requirements.txt
 python manage.py migrate
 
 # API + WebSocket:
-daphne -b 0.0.0.0 -p 8000 lightning_map_game_backend.asgi:application
+daphne -b 0.0.0.0 -p 8000 boltbet_backend.asgi:application
 # or:
 python manage.py runserver
 ```

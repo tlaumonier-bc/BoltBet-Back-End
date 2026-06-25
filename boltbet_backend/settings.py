@@ -1,5 +1,5 @@
 """
-Django settings for lightning_map_game_backend project.
+Django settings for boltbet_backend project.
 """
 
 import os
@@ -75,7 +75,7 @@ MIDDLEWARE = [
 # Narrowed from CORS_ALLOW_ALL_ORIGINS to an env-driven allowlist.
 CORS_ALLOWED_ORIGINS = _env_list("CORS_ALLOWED_ORIGINS", "http://localhost:3000")
 
-ROOT_URLCONF = 'lightning_map_game_backend.urls'
+ROOT_URLCONF = 'boltbet_backend.urls'
 
 TEMPLATES = [
     {
@@ -92,8 +92,8 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = 'lightning_map_game_backend.wsgi.application'
-ASGI_APPLICATION = 'lightning_map_game_backend.asgi.application'
+WSGI_APPLICATION = 'boltbet_backend.wsgi.application'
+ASGI_APPLICATION = 'boltbet_backend.asgi.application'
 
 # Database
 # PostgreSQL in EVERY environment. There is no SQLite fallback: local dev uses

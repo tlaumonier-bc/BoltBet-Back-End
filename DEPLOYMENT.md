@@ -1,7 +1,7 @@
 # Deployment — Lightning Map Game Backend
 
-App name (deployable / image / domains / Vault paths): **`lightning-map-game-backend`**
-Python package (importable): **`lightning_map_game_backend`** (Python doesn't allow hyphens).
+App name (deployable / image / domains / Vault paths): **`boltbet-backend`**
+Python package (importable): **`boltbet_backend`** (Python doesn't allow hyphens).
 
 ## Runtime model (current: consolidated)
 
@@ -18,7 +18,7 @@ This is deliberately reversible — see "Splitting workers out later".
 
 | Role | Command | Public | Singleton | How it runs now |
 | --- | --- | --- | --- | --- |
-| Web / API / WebSocket | `daphne … lightning_map_game_backend.asgi:application` | Yes | Yes (`count: 1`) | The service container |
+| Web / API / WebSocket | `daphne … boltbet_backend.asgi:application` | Yes | Yes (`count: 1`) | The service container |
 | Lightning ingest | `python manage.py start_lightning_stream` | No | **Yes** | In-process thread (`RUN_INGEST_IN_PROCESS`) |
 | Retention purge | `python manage.py purge_strikes --hours 72` | No | No | In-process thread (`RUN_PURGE_IN_PROCESS`) |
 | Per-country trim | `python manage.py trim_country_strikes --keep 1000` | No | No | In-process thread (`RUN_TRIM_IN_PROCESS`) |
@@ -28,7 +28,7 @@ This is deliberately reversible — see "Splitting workers out later".
 ## Build & run
 
 - Build command: `docker build` using the repo `Dockerfile`.
-- Start command: `daphne -b 0.0.0.0 -p ${PORT:-8000} lightning_map_game_backend.asgi:application`
+- Start command: `daphne -b 0.0.0.0 -p ${PORT:-8000} boltbet_backend.asgi:application`
   (the `Dockerfile` CMD already does this).
 - Port: the container honors `$PORT`; defaults to **8000**, which matches the
   port declared in the APPLICATIONS `app-definition.yml`.
