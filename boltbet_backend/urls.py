@@ -11,6 +11,7 @@ from account.views import (
     username_available, register, profile,
     place_bet, bet_result, claim_tokens, leaderboard,
 )
+from account.firebase_auth import firebase_exchange
 from account.oauth import oauth_start, oauth_callback
 
 
@@ -44,6 +45,7 @@ api_urlpatterns = [
     path("game/leaderboard/", leaderboard),
 
     # --- OAuth (Google to start; extensible) ---
+    path("auth/firebase/", firebase_exchange),
     path("auth/<str:provider>/start/", oauth_start),
     path("auth/<str:provider>/callback/", oauth_callback),
 ]
