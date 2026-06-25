@@ -4,13 +4,12 @@ substitutions:
   _SERVICE: boltbet-backend-web
   _IMAGE: boltbet-backend
   _RUNTIME_SA: vibe-app-runtime@blockchain-gemini.iam.gserviceaccount.com
-  # The browser calls the backend from the frontend origin. Override this with
-  # the deployed frontend URL when submitting the build.
-  _CORS_ALLOWED_ORIGINS: ""
-  _DB_HOST: ""
-  _DB_NAME: ""
-  _DB_USER: ""
-  _REDIS_HOST: ""
+  # Dev deployment defaults. Override these for other environments.
+  _CORS_ALLOWED_ORIGINS: https://boltbet-frontend-web.a.run.app
+  _DB_HOST: /cloudsql/blockchain-gemini:europe-west2:boltbet-postgres-dev
+  _DB_NAME: boltbet_dev
+  _DB_USER: postgres
+  _REDIS_HOST: 10.200.191.75
 
 steps:
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
