@@ -1,4 +1,3 @@
-
 substitutions:
   _REGION: europe-west2
   _REPO: vibe-apps
