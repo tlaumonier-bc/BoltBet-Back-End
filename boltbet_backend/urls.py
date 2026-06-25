@@ -1,17 +1,12 @@
-"""URL configuration for boltbet_backend."""
+"""URL configuration for lightning_map_game_backend."""
 from django.contrib import admin
 from django.urls import include, path
 from django.http import HttpResponse
 
-from game.views import (
-    game_state, place_pick,
-    leaderboard_current, leaderboard_wins, leaderboard_average,
-)
 from lightning.views import (
     country_strikes, recent_strikes, strikes_per_minute,
     weather_now, weather_tile, strikes_count,
 )
-from bets.views import create_bet
 from account.views import (
     username_available, register, profile,
     place_bet, bet_result, claim_tokens, leaderboard,
@@ -20,21 +15,13 @@ from account.oauth import oauth_start, oauth_callback
 
 
 def healthz(request):
-    # Cheap, no auth, no DB — for ingress / Nomad health checks.
+    # Cheap, no auth, no DB — for ingress / health checks.
     return HttpResponse("ok", content_type="text/plain", status=200)
 
 
 # Public REST API. Mounted under both /api/ and /public/api/ so it works whether
 # or not the ingress strips the /public prefix before the request reaches us.
 api_urlpatterns = [
-    # --- Legacy zone game (unused by the current frontend; kept for compat) ---
-    path("game/state/", game_state),
-    path("game/pick/", place_pick),
-    path("game/leaderboard/current/", leaderboard_current),
-    path("game/leaderboard/wins/", leaderboard_wins),
-    path("game/leaderboard/average/", leaderboard_average),
-    path("bets/", create_bet),
-
     # --- Strike feeds ---
     path("strikes/by-country/", country_strikes),
     path("strikes/recent/", recent_strikes),
