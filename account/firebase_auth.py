@@ -43,10 +43,8 @@ def _unique_username(base):
     return candidate
 
 
-def _preferred_username(decoded_token):
-    name = decoded_token.get("name") or ""
-    email = decoded_token.get("email") or ""
-    return decoded_token.get("displayName") or name or (email.split("@")[0] if email else "") or "player"
+def _random_username():
+    return f"player-{secrets.token_hex(3)}"
 
 
 def _legacy_google_subject(decoded_token):
@@ -117,7 +115,7 @@ def firebase_exchange(request):
                 guest.save(update_fields=["provider", "provider_subject"])
                 player = guest
             else:
-                username = _unique_username(_preferred_username(decoded))
+                username = _unique_username(_random_username())
                 player = Player.objects.create(
                     username=username,
                     username_lower=username.lower(),
