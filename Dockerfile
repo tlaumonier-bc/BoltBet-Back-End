@@ -1,22 +1,32 @@
 # ===== build stage =====
-FROM python:3.13-slim AS builder
+FROM node:20-bookworm-slim AS builder
 
 WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+COPY package*.json ./
+# --ignore-scripts: skip the postinstall hook (it runs scripts/copy-cesium.mjs,
+# which isn't in the image yet). `npm run build` below copies Cesium's assets.
+RUN npm ci --ignore-scripts
 
-# ===== runtime stage =====
-FROM python:3.13-slim
-
-WORKDIR /app
-COPY --from=builder /install /usr/local
 COPY . .
 
-# collectstatic does NOT open a database connection. DJANGO_ENV is unset during
-# the build, so the production DB_HOST guard in settings.py does not fire.
-RUN python manage.py collectstatic --noinput
+# Baked in at build time (next build), NOT read at runtime. Passed via --build-arg.
+ARG NEXT_PUBLIC_API_URL
+ARG NEXT_PUBLIC_WS_URL
+ARG NEXT_PUBLIC_OWM_API_KEY
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_WS_URL=$NEXT_PUBLIC_WS_URL
+ENV NEXT_PUBLIC_OWM_API_KEY=$NEXT_PUBLIC_OWM_API_KEY
 
-# Respect the platform-provided port (Cloud Run sets $PORT); default to 8000,
-# which matches the port declared in the APPLICATIONS app-definition.yml.
-EXPOSE 8000
-CMD ["sh", "-c", "daphne -b 0.0.0.0 -p ${PORT:-8000} lightning_map_game_backend.asgi:application"]
+RUN npm run build
+
+# ===== runtime stage =====
+FROM node:20-bookworm-slim
+
+WORKDIR /app
+COPY --from=builder /app/.next ./.next
+COPY --from=builder /app/public ./public
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/package.json ./package.json
+
+EXPOSE 3000
+CMD ["npm", "run", "start", "--", "-p", "3000"]
