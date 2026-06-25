@@ -5,7 +5,7 @@ substitutions:
   _IMAGE: boltbet-backend
   _RUNTIME_SA: vibe-app-runtime@blockchain-gemini.iam.gserviceaccount.com
   # Dev deployment defaults. Override these for other environments.
-  _CORS_ALLOWED_ORIGINS: https://boltbet-frontend-web.a.run.app
+  _CORS_ALLOWED_ORIGINS: https://boltbet-frontend-web-2ulnbyw42a-nw.a.run.app
 
 steps:
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
