@@ -6,10 +6,6 @@ substitutions:
   _RUNTIME_SA: vibe-app-runtime@blockchain-gemini.iam.gserviceaccount.com
   # Dev deployment defaults. Override these for other environments.
   _CORS_ALLOWED_ORIGINS: https://boltbet-frontend-web.a.run.app
-  _DB_HOST: /cloudsql/blockchain-gemini:europe-west2:boltbet-postgres-dev
-  _DB_NAME: boltbet_dev
-  _DB_USER: postgres
-  _REDIS_HOST: 10.200.191.75
 
 steps:
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
@@ -18,10 +14,6 @@ steps:
       - -ceu
       - |
         test -n "${_CORS_ALLOWED_ORIGINS}" || { echo "_CORS_ALLOWED_ORIGINS is required"; exit 1; }
-        test -n "${_DB_HOST}" || { echo "_DB_HOST is required"; exit 1; }
-        test -n "${_DB_NAME}" || { echo "_DB_NAME is required"; exit 1; }
-        test -n "${_DB_USER}" || { echo "_DB_USER is required"; exit 1; }
-        test -n "${_REDIS_HOST}" || { echo "_REDIS_HOST is required"; exit 1; }
 
   - name: gcr.io/cloud-builders/docker
     args:
@@ -56,8 +48,8 @@ steps:
       - --cpu=1
       - --min-instances=0
       - --max-instances=1
-      - --set-env-vars=^@^DJANGO_ENV=production@DJANGO_BEHIND_PROXY=true@DJANGO_DEBUG=false@DJANGO_ALLOWED_HOSTS=*@CORS_ALLOWED_ORIGINS=${_CORS_ALLOWED_ORIGINS}@DB_HOST=${_DB_HOST}@DB_NAME=${_DB_NAME}@DB_USER=${_DB_USER}@REDIS_HOST=${_REDIS_HOST}@RUN_INGEST_IN_PROCESS=true@RUN_PURGE_IN_PROCESS=true@RUN_TRIM_IN_PROCESS=true@RUN_RESOLVER_IN_PROCESS=true
-      - --set-secrets=DJANGO_SECRET_KEY=boltbet-django-secret-key:latest,OWM_API_KEY=boltbet-owm-api-key:latest,DB_PASSWORD=boltbet-db-password:latest,REDIS_PASSWORD=boltbet-redis-password:latest,GOOGLE_OAUTH_CLIENT_ID=boltbet-google-oauth-client-id:latest,GOOGLE_OAUTH_CLIENT_SECRET=boltbet-google-oauth-client-secret:latest
+      - --set-env-vars=^@^DJANGO_ENV=production@DJANGO_BEHIND_PROXY=true@DJANGO_DEBUG=false@DJANGO_ALLOWED_HOSTS=*@CORS_ALLOWED_ORIGINS=${_CORS_ALLOWED_ORIGINS}@RUN_INGEST_IN_PROCESS=true@RUN_PURGE_IN_PROCESS=true@RUN_TRIM_IN_PROCESS=true@RUN_RESOLVER_IN_PROCESS=true
+      - --set-secrets=DJANGO_SECRET_KEY=boltbet-django-secret-key:latest,OWM_API_KEY=boltbet-owm-api-key:latest,DB_HOST=boltbet-db-host:latest,DB_NAME=boltbet-db-name:latest,DB_USER=boltbet-db-user:latest,DB_PASSWORD=boltbet-db-password:latest,REDIS_HOST=boltbet-redis-host:latest,REDIS_PASSWORD=boltbet-redis-password:latest,GOOGLE_OAUTH_CLIENT_ID=boltbet-google-oauth-client-id:latest,GOOGLE_OAUTH_CLIENT_SECRET=boltbet-google-oauth-client-secret:latest
 
 images:
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:$COMMIT_SHA
