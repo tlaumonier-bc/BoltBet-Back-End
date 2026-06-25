@@ -32,7 +32,7 @@ This is deliberately reversible — see "Splitting workers out later".
   (the `Dockerfile` CMD already does this).
 - Port: the container honors `$PORT`; defaults to **8000**, which matches the
   port declared in the APPLICATIONS `app-definition.yml`.
-- Health check path: **`/healthz`** (cheap, no auth, no DB).
+- Health check path: **`/health`** (cheap, no auth, no DB).
 
 ## Migrations
 
@@ -82,7 +82,7 @@ Nothing here should be baked into the image; production values come from Vault.
 
 - REST API: `https://<api-host>/api/...` (also mounted at `/public/api/...`)
 - WebSocket: `wss://<api-host>/ws/lightning/` (also `…/public/ws/lightning/`)
-- Health: `https://<api-host>/healthz`
+- Health: `https://<api-host>/health`
 
 The frontend's `NEXT_PUBLIC_API_URL` / `NEXT_PUBLIC_WS_URL` should point at these.
 

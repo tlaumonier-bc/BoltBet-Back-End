@@ -14,7 +14,7 @@ from account.views import (
 from account.oauth import oauth_start, oauth_callback
 
 
-def healthz(request):
+def health(request):
     # Cheap, no auth, no DB — for ingress / health checks.
     return HttpResponse("ok", content_type="text/plain", status=200)
 
@@ -49,7 +49,7 @@ api_urlpatterns = [
 ]
 
 urlpatterns = [
-    path("healthz", healthz),
+    path("health", health),
     path("admin/", admin.site.urls),
 
     path("api/", include(api_urlpatterns)),
