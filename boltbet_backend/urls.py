@@ -5,7 +5,7 @@ from django.http import HttpResponse
 
 from lightning.views import (
     country_strikes, recent_strikes, strikes_per_minute,
-    weather_now, weather_tile, strikes_count,
+    weather_now, weather_tile, strikes_count, country_news,
 )
 from account.views import (
     username_available, register, profile,
@@ -32,6 +32,9 @@ api_urlpatterns = [
     # --- Weather (server-side OWM key) ---
     path("weather/now/", weather_now),
     path("weather/tiles/<str:layer>/<int:z>/<int:x>/<int:y>.png", weather_tile),
+
+    # --- Local SEO freshness ---
+    path("news/country/", country_news),
 
     # --- Up/Down game: identity ---
     path("game/username/", username_available),
