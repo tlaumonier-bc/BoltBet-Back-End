@@ -45,9 +45,10 @@ class Session(models.Model):
 
 class StrikeBet(models.Model):
     """
-    One Up/Down bet for a 40s cycle. The window is identified by round_id
-    (= floor(now/40000) at game time). Resolution is server-authoritative:
-    prev_count / final_count are (re)computed from the strike store.
+    One Up/Down bet. The counting window starts at `placed_at` and runs for 30s.
+    `round_id` is retained as a legacy/audit identifier for old clients.
+    Resolution is server-authoritative: prev_count is snapshotted at placement
+    and final_count is recomputed from the strike store.
     """
 
     SIDES = [("up", "up"), ("down", "down")]
