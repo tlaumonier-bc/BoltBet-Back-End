@@ -1,9 +1,13 @@
 from datetime import timedelta
+import email.utils
+import html
 import os
+import re
 import urllib.request
 import urllib.parse
 import json
 import datetime as dt
+import xml.etree.ElementTree as ET
 from django.utils import timezone
 from django.db import connection
 from django.db.models import Sum
@@ -12,6 +16,31 @@ from django.http import HttpResponse, JsonResponse
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from .models import StrikeRollupMinute, LightningStrike, CountryStrike
+
+
+NEWS_CACHE_SECONDS = 60 * 30
+NEWS_DEFAULT_LIMIT = 5
+NEWS_MAX_LIMIT = 8
+NEWS_SAFE_RE = re.compile(r"[^a-zA-Z0-9À-ÿ\s'’._-]")
+
+
+def _direct_news_url(link):
+    parsed = urllib.parse.urlparse(link)
+    host = parsed.netloc.lower()
+    if host.endswith("bing.com"):
+        nested = urllib.parse.parse_qs(parsed.query).get("url", [""])[0]
+        if nested:
+            return nested
+    if host.endswith("google.com") or host.endswith("googleusercontent.com"):
+        return ""
+    return link
+
+
+def _source_from_url(url):
+    host = urllib.parse.urlparse(url).netloc.lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return host
 
 
 @api_view(["GET"])
@@ -108,6 +137,81 @@ def country_strikes(request):
                 {"lat": lat, "lon": lon, "timestamp": ts,
                  "quality": quality, "received_at": recv}
             )
+    return Response(out)
+
+
+@api_view(["GET"])
+def country_news(request):
+    """
+    Small, cached local-language news feed for SEO country pages.
+
+    ?country=FR&lang=fr&q=foudre%20France&limit=5
+    """
+    country = (request.GET.get("country") or "").strip().upper()
+    lang = (request.GET.get("lang") or "en").strip().lower()
+    query = (request.GET.get("q") or "lightning").strip()
+    try:
+        limit = min(max(int(request.GET.get("limit", NEWS_DEFAULT_LIMIT)), 1), NEWS_MAX_LIMIT)
+    except ValueError:
+        limit = NEWS_DEFAULT_LIMIT
+
+    if not re.fullmatch(r"[A-Z]{2}", country):
+        return Response({"error": "country_required"}, status=400)
+    if not re.fullmatch(r"[a-z]{2}(?:-[a-z]{2})?", lang):
+        return Response({"error": "bad_lang"}, status=400)
+
+    query = NEWS_SAFE_RE.sub(" ", query)[:120].strip() or "lightning"
+    ckey = f"news:v2:{country}:{lang}:{query}:{limit}"
+    cached = cache.get(ckey)
+    if cached:
+        return Response(cached)
+
+    params = urllib.parse.urlencode({
+        "q": query,
+        "format": "rss",
+        "cc": country.lower(),
+        "setlang": lang,
+    })
+    url = f"https://www.bing.com/news/search?{params}"
+    req = urllib.request.Request(url, headers={"User-Agent": "LightningMapGame/1.0"})
+
+    try:
+        with urllib.request.urlopen(req, timeout=6) as r:
+            data = r.read()
+        root = ET.fromstring(data)
+    except Exception:
+        return Response({"error": "news_fetch_failed"}, status=502)
+
+    articles = []
+    for item in root.findall("./channel/item"):
+        title = html.unescape((item.findtext("title") or "").strip())
+        link = _direct_news_url((item.findtext("link") or "").strip())
+        source = html.unescape((item.findtext("source") or "").strip()) or _source_from_url(link)
+        published_raw = (item.findtext("pubDate") or "").strip()
+        published = ""
+        if published_raw:
+            try:
+                published = email.utils.parsedate_to_datetime(published_raw).isoformat()
+            except (TypeError, ValueError):
+                published = published_raw
+        if title and link:
+            articles.append({
+                "title": title,
+                "url": link,
+                "source": source,
+                "publishedAt": published,
+            })
+        if len(articles) >= limit:
+            break
+
+    out = {
+        "country": country,
+        "lang": lang,
+        "query": query,
+        "articles": articles,
+        "fetchedAt": timezone.now().isoformat(),
+    }
+    cache.set(ckey, out, NEWS_CACHE_SECONDS)
     return Response(out)
 
 

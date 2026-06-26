@@ -1,16 +1,16 @@
-# 1. API + WebSocket server.  --> OR #daphne -b 0.0.0.0 -p 8000 boltbet_backend.asgi:application
+# API + WebSocket server (ASGI)
+daphne -b 0.0.0.0 -p ${PORT:-8000} boltbet_backend.asgi:application
+# or, for local dev:
 python manage.py runserver
 
-# pulls live strikes, persists them, broadcasts grid_update
-python manage.py start_lightning_stream
+# Background tasks. In deployment these run as in-process threads via the
+# RUN_*_IN_PROCESS flags; each is also runnable standalone (e.g. if split out
+# into its own service later).
+python manage.py start_lightning_stream            # live ingest (SINGLETON)
+python manage.py purge_strikes --hours 72          # raw-strike retention (scheduled)
+python manage.py trim_country_strikes --keep 1000  # per-country trim (scheduled)
+python manage.py resolve_strikes_bets --once       # settle pending Up/Down bets
 
-# resolves pending bets, emits bet_resolved
-python manage.py resolve_bets
-
-# Game loop — rounds + scoring + leaderboard broadcasts  (ONE instance)
-python manage.py run_game
-
-# migrations
-python manage.py makemigrations lightning bets account
+# Migrations
+python manage.py makemigrations lightning account
 python manage.py migrate
-

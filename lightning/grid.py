@@ -47,35 +47,6 @@ def _cell(lat: float, lon: float, size: float, prefix: str):
     return f"{prefix}_{col}_{row}", col, row
 
 
-def zone_for(lat: float, lon: float):
-    """Strike -> game zone id at ZONE_SIZE_DEG. Returns (zone_id, col, row)."""
-    return _cell(lat, lon, ZONE_SIZE_DEG, "z")
-
-
 def rollup_cell_for(lat: float, lon: float):
     """Strike -> fine rollup cell id at ROLLUP_SIZE_DEG. Returns (cell_id, col, row)."""
     return _cell(lat, lon, ROLLUP_SIZE_DEG, "r")
-
-
-def zone_bounds(zone_id: str):
-    """zone_id -> (lon_min, lon_max, lat_min, lat_max). Raises on a bad id."""
-    prefix, col, row = zone_id.split("_")
-    if prefix != "z":
-        raise ValueError(f"not a zone id: {zone_id}")
-    col, row = int(col), int(row)
-    cols, rows = _cols_rows(ZONE_SIZE_DEG)
-    if not (0 <= col < cols and 0 <= row < rows):
-        raise ValueError(f"zone out of range: {zone_id}")
-    lon_min = -180.0 + col * ZONE_SIZE_DEG
-    lat_min = -90.0 + row * ZONE_SIZE_DEG
-    return lon_min, lon_min + ZONE_SIZE_DEG, lat_min, lat_min + ZONE_SIZE_DEG
-
-
-def n_zones() -> int:
-    cols, rows = _cols_rows(ZONE_SIZE_DEG)
-    return cols * rows
-
-
-def all_zone_ids():
-    cols, rows = _cols_rows(ZONE_SIZE_DEG)
-    return [f"z_{c}_{r}" for c in range(cols) for r in range(rows)]

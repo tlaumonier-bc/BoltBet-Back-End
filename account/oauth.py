@@ -6,7 +6,7 @@ merges a linked guest, then redirects to <next>#auth_token=...&auth_user=...
 Env required (per provider):
   GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET
 Optional:
-  OAUTH_PUBLIC_BASE   e.g. https://api.lightningmapbets.com  (else built from request)
+  OAUTH_PUBLIC_BASE   e.g. https://api.lightningmapgame.com  (else built from request)
 Register the callback URL <base>/api/auth/google/callback/ in the Google console.
 """
 
@@ -35,7 +35,7 @@ PROVIDERS = {
         "client_secret_env": "GOOGLE_OAUTH_CLIENT_SECRET",
     },
 }
-STATE_SALT = "boltbet.oauth.state"
+STATE_SALT = "lightning-map-game.oauth.state"
 
 
 def _provider(name):
