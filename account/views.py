@@ -72,7 +72,6 @@ def place_bet(request):
 
     data = request.data
     try:
-        round_id = int(data["roundId"])
         side = str(data["side"])
         amount = int(data["amount"])
         scope_kind = str(data["scopeKind"])
@@ -87,12 +86,8 @@ def place_bet(request):
     elif not scope_id or scope_id == "GLOBE":
         return Response({"error": "bad_scope"}, status=400)
 
-    # 1) Betting window open: current cycle == roundId-1 AND we're in the buffer.
-    now = services.now_ms()
-    cycle = now // services.CYCLE_MS
-    offset = now - cycle * services.CYCLE_MS
-    if not (cycle == round_id - 1 and offset >= services.GAME_MS):
-        return Response({"error": "betting_closed"}, status=400)
+    now = services.timezone.now()
+    round_id = services.now_ms()  # legacy/audit id; the bet window starts at placed_at.
 
     try:
         with transaction.atomic():
@@ -110,8 +105,13 @@ def place_bet(request):
             if scope_kind == "country" and not services.country_playable(scope_id):
                 return Response({"error": "not_playable"}, status=400)
 
-            # 5) snapshot prev (game window of roundId-1), debit, create
-            prev = services.count_window(scope_kind, scope_id, round_id - 1)
+            # 5) snapshot previous 30s, debit, create
+            prev = services.count_between(
+                scope_kind,
+                scope_id,
+                now - services.dt.timedelta(milliseconds=services.GAME_MS),
+                now,
+            )
             locked.tokens -= amount
             locked.save(update_fields=["tokens"])
             bet = StrikeBet.objects.create(
@@ -138,7 +138,8 @@ def bet_result(request, bet_id):
 
     # Lazy settlement: settle the first time it's polled after the window closes.
     if bet.status != "settled":
-        if services.now_ms() < bet.round_id * services.CYCLE_MS + services.GAME_MS:
+        window_end = bet.placed_at + services.dt.timedelta(milliseconds=services.GAME_MS)
+        if services.timezone.now() < window_end:
             return Response(status=204)  # window still open / unsettled
         services.settle_bet(bet.id)
         bet.refresh_from_db()
