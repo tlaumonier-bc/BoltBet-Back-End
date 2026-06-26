@@ -24,6 +24,25 @@ NEWS_MAX_LIMIT = 8
 NEWS_SAFE_RE = re.compile(r"[^a-zA-Z0-9À-ÿ\s'’._-]")
 
 
+def _direct_news_url(link):
+    parsed = urllib.parse.urlparse(link)
+    host = parsed.netloc.lower()
+    if host.endswith("bing.com"):
+        nested = urllib.parse.parse_qs(parsed.query).get("url", [""])[0]
+        if nested:
+            return nested
+    if host.endswith("google.com") or host.endswith("googleusercontent.com"):
+        return ""
+    return link
+
+
+def _source_from_url(url):
+    host = urllib.parse.urlparse(url).netloc.lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return host
+
+
 @api_view(["GET"])
 def recent_strikes(request):
     """
@@ -142,19 +161,18 @@ def country_news(request):
         return Response({"error": "bad_lang"}, status=400)
 
     query = NEWS_SAFE_RE.sub(" ", query)[:120].strip() or "lightning"
-    lang_base = lang.split("-")[0]
-    ckey = f"news:{country}:{lang}:{query}:{limit}"
+    ckey = f"news:v2:{country}:{lang}:{query}:{limit}"
     cached = cache.get(ckey)
     if cached:
         return Response(cached)
 
     params = urllib.parse.urlencode({
         "q": query,
-        "hl": lang,
-        "gl": country,
-        "ceid": f"{country}:{lang_base}",
+        "format": "rss",
+        "cc": country.lower(),
+        "setlang": lang,
     })
-    url = f"https://news.google.com/rss/search?{params}"
+    url = f"https://www.bing.com/news/search?{params}"
     req = urllib.request.Request(url, headers={"User-Agent": "LightningMapGame/1.0"})
 
     try:
@@ -165,10 +183,10 @@ def country_news(request):
         return Response({"error": "news_fetch_failed"}, status=502)
 
     articles = []
-    for item in root.findall("./channel/item")[:limit]:
+    for item in root.findall("./channel/item"):
         title = html.unescape((item.findtext("title") or "").strip())
-        link = (item.findtext("link") or "").strip()
-        source = html.unescape((item.findtext("source") or "").strip())
+        link = _direct_news_url((item.findtext("link") or "").strip())
+        source = html.unescape((item.findtext("source") or "").strip()) or _source_from_url(link)
         published_raw = (item.findtext("pubDate") or "").strip()
         published = ""
         if published_raw:
@@ -183,6 +201,8 @@ def country_news(request):
                 "source": source,
                 "publishedAt": published,
             })
+        if len(articles) >= limit:
+            break
 
     out = {
         "country": country,
