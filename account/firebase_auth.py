@@ -1,11 +1,13 @@
 import os
 import re
 import secrets
+from datetime import timedelta
 
 import firebase_admin
 from firebase_admin import auth as firebase_auth
 from firebase_admin import credentials
 from django.db import IntegrityError, transaction
+from django.utils import timezone
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
@@ -14,6 +16,15 @@ from .models import Player, Session
 
 
 FIREBASE_PROVIDER = "firebase"
+FIREBASE_GOOGLE_PROVIDER = "firebase_google"
+VERIFIED_FIREBASE_PROVIDERS = {"google.com": FIREBASE_GOOGLE_PROVIDER}
+USERNAME_CHANGE_DAYS = 30
+
+
+def _username_change_available_at(player):
+    if not player.username_changed_at:
+        return None
+    return player.username_changed_at + timedelta(days=USERNAME_CHANGE_DAYS)
 
 
 def _firebase_app():
@@ -71,15 +82,23 @@ def firebase_exchange(request):
     if not firebase_uid:
         return Response({"error": "no_subject"}, status=400)
 
+    sign_in_provider = str((decoded.get("firebase") or {}).get("sign_in_provider") or "")
+    provider = VERIFIED_FIREBASE_PROVIDERS.get(sign_in_provider)
+    if not provider:
+        return Response({"error": "unsupported_firebase_provider"}, status=400)
+
     legacy_google_subject = _legacy_google_subject(decoded)
 
     try:
         with transaction.atomic():
             existing = (
                 Player.objects.select_for_update()
-                .filter(provider=FIREBASE_PROVIDER, provider_subject=firebase_uid)
+                .filter(provider__in=[provider, FIREBASE_PROVIDER], provider_subject=firebase_uid)
                 .first()
             )
+            if existing and existing.provider != provider:
+                existing.provider = provider
+                existing.save(update_fields=["provider"])
 
             if not existing and legacy_google_subject:
                 existing = (
@@ -88,7 +107,7 @@ def firebase_exchange(request):
                     .first()
                 )
                 if existing:
-                    existing.provider = FIREBASE_PROVIDER
+                    existing.provider = provider
                     existing.provider_subject = firebase_uid
                     existing.save(update_fields=["provider", "provider_subject"])
 
@@ -110,7 +129,7 @@ def firebase_exchange(request):
                     guest.save(update_fields=["retired", "username_lower"])
                     player.save(update_fields=["tokens", "wins", "games_played"])
             elif guest:
-                guest.provider = FIREBASE_PROVIDER
+                guest.provider = provider
                 guest.provider_subject = firebase_uid
                 guest.save(update_fields=["provider", "provider_subject"])
                 player = guest
@@ -120,7 +139,7 @@ def firebase_exchange(request):
                     username=username,
                     username_lower=username.lower(),
                     tokens=services.START_TOKENS,
-                    provider=FIREBASE_PROVIDER,
+                    provider=provider,
                     provider_subject=firebase_uid,
                 )
 
@@ -129,4 +148,12 @@ def firebase_exchange(request):
     except IntegrityError:
         return Response({"error": "identity_conflict"}, status=409)
 
-    return Response({"username": player.username, "token": token, "tokens": player.tokens})
+    available_at = _username_change_available_at(player)
+    return Response({
+        "username": player.username,
+        "token": token,
+        "tokens": player.tokens,
+        "verified": True,
+        "canChangeUsername": available_at is None or timezone.now() >= available_at,
+        "usernameChangeAvailableAt": available_at.isoformat() if available_at else None,
+    })

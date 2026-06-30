@@ -17,6 +17,7 @@ class Player(models.Model):
     wins = models.IntegerField(default=0)
     games_played = models.IntegerField(default=0)
     retired = models.BooleanField(default=False)  # merged guest accounts
+    username_changed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
