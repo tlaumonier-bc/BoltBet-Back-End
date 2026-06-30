@@ -1,11 +1,17 @@
 import secrets
+from datetime import timedelta
 
 from django.db import IntegrityError, transaction
+from django.utils import timezone
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from .models import Player, Session, StrikeBet
 from . import services
+
+
+USERNAME_CHANGE_DAYS = 30
+VERIFIED_PROVIDERS = {"firebase_google", "google"}
 
 
 def _player_from_request(request):
@@ -23,6 +29,43 @@ def _player_from_request(request):
     return None if session.player.retired else session.player
 
 
+def _is_verified(player):
+    return player.provider in VERIFIED_PROVIDERS
+
+
+def _username_change_available_at(player):
+    if not player.username_changed_at:
+        return None
+    return player.username_changed_at + timedelta(days=USERNAME_CHANGE_DAYS)
+
+
+def _can_change_username(player):
+    available_at = _username_change_available_at(player)
+    return available_at is None or timezone.now() >= available_at
+
+
+def _profile_payload(player):
+    available_at = _username_change_available_at(player)
+    return {
+        "username": player.username,
+        "tokens": player.tokens,
+        "verified": _is_verified(player),
+        "canChangeUsername": _can_change_username(player),
+        "usernameChangeAvailableAt": available_at.isoformat() if available_at else None,
+    }
+
+
+def _random_username():
+    return f"player-{secrets.token_hex(3)}"
+
+
+def _unique_username(base=None):
+    candidate = base or _random_username()
+    while Player.objects.filter(username_lower=candidate.lower()).exists():
+        candidate = _random_username()
+    return candidate
+
+
 # --------------------------- identity ----------------------------------------
 
 @api_view(["GET"])
@@ -37,8 +80,10 @@ def username_available(request):
 @api_view(["POST"])
 def register(request):
     name = (request.data.get("username") or "").strip()
-    if not services.USERNAME_RE.match(name):
+    if name and not services.USERNAME_RE.match(name):
         return Response({"error": "invalid_username"}, status=400)
+    if not name:
+        name = _unique_username()
     lower = name.lower()
     try:
         with transaction.atomic():
@@ -51,7 +96,9 @@ def register(request):
             Session.objects.create(token=token, player=player)
     except IntegrityError:
         return Response({"error": "username_taken"}, status=409)
-    return Response({"username": player.username, "token": token, "tokens": player.tokens})
+    payload = _profile_payload(player)
+    payload["token"] = token
+    return Response(payload)
 
 
 @api_view(["GET"])
@@ -59,7 +106,43 @@ def profile(request):
     player = _player_from_request(request)
     if player is None:
         return Response(status=401)
-    return Response({"username": player.username, "tokens": player.tokens})
+    return Response(_profile_payload(player))
+
+
+@api_view(["POST"])
+def change_username(request):
+    player = _player_from_request(request)
+    if player is None:
+        return Response(status=401)
+
+    name = (request.data.get("username") or "").strip()
+    if not services.USERNAME_RE.match(name):
+        return Response({"error": "invalid_username"}, status=400)
+
+    lower = name.lower()
+    if lower == player.username_lower:
+        return Response(_profile_payload(player))
+
+    available_at = _username_change_available_at(player)
+    if available_at and timezone.now() < available_at:
+        return Response({
+            "error": "username_change_locked",
+            "usernameChangeAvailableAt": available_at.isoformat(),
+        }, status=429)
+
+    try:
+        with transaction.atomic():
+            locked = Player.objects.select_for_update().get(pk=player.pk)
+            if Player.objects.filter(username_lower=lower).exclude(pk=locked.pk).exists():
+                return Response({"error": "username_taken"}, status=409)
+            locked.username = name
+            locked.username_lower = lower
+            locked.username_changed_at = timezone.now()
+            locked.save(update_fields=["username", "username_lower", "username_changed_at"])
+    except IntegrityError:
+        return Response({"error": "username_taken"}, status=409)
+
+    return Response(_profile_payload(locked))
 
 
 # ----------------------------- game ------------------------------------------
@@ -166,9 +249,8 @@ def claim_tokens(request):
         if locked.tokens <= 0:  # anti-abuse: only top up at zero
             locked.tokens = services.START_TOKENS
             locked.save(update_fields=["tokens"])
-        balance = locked.tokens
-        username = locked.username
-    return Response({"username": username, "tokens": balance})
+        payload = _profile_payload(locked)
+    return Response(payload)
 
 
 # -------------------------- leaderboard --------------------------------------
@@ -184,6 +266,7 @@ def leaderboard(request):
             .order_by("-tokens", "id")[:limit])
     return Response([
         {"username": p.username, "tokens": p.tokens,
-         "wins": p.wins, "gamesPlayed": p.games_played}
+         "wins": p.wins, "gamesPlayed": p.games_played,
+         "verified": _is_verified(p)}
         for p in rows
     ])

@@ -9,7 +9,7 @@ from lightning.views import (
 )
 from account.views import (
     username_available, register, profile,
-    place_bet, bet_result, claim_tokens, leaderboard,
+    change_username, place_bet, bet_result, claim_tokens, leaderboard,
 )
 from account.firebase_auth import firebase_exchange
 from account.oauth import oauth_start, oauth_callback
@@ -38,6 +38,7 @@ api_urlpatterns = [
 
     # --- Up/Down game: identity ---
     path("game/username/", username_available),
+    path("game/username/change/", change_username),
     path("game/register/", register),
     path("game/profile/", profile),
 
