@@ -202,6 +202,24 @@ def change_username(request):
     return Response(_profile_payload(locked))
 
 
+@api_view(["POST"])
+def change_country(request):
+    player = _player_from_request(request)
+    if player is None:
+        return Response(status=401)
+
+    country_code = _clean_country_code(request.data.get("countryCode"))
+    if not country_code:
+        return Response({"error": "invalid_country"}, status=400)
+
+    with transaction.atomic():
+        locked = Player.objects.select_for_update().get(pk=player.pk)
+        locked.country_code = country_code
+        locked.save(update_fields=["country_code"])
+
+    return Response(_profile_payload(locked))
+
+
 # ----------------------------- game ------------------------------------------
 
 @api_view(["POST"])
