@@ -14,6 +14,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from lightning.models import LightningStrike, CountryStrike
+from . import analytics
 from .models import Player, StrikeBet
 
 GAME_MS = 30_000
@@ -111,4 +112,14 @@ def settle_bet(bet_id):
     bet.save(update_fields=[
         "prev_count", "final_count", "outcome", "payout", "status", "settled_at",
     ])
+    analytics.capture("bet_resolved", player, properties={
+        "bet_id": bet.id,
+        "outcome": outcome,
+        "amount": bet.amount,
+        "payout": payout,
+        "scope": bet.scope_kind,
+        "scope_id": bet.scope_id,
+        "prev_count": prev,
+        "final_count": final,
+    })
     return bet

@@ -11,6 +11,7 @@ from django.utils import timezone
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
+from . import analytics
 from . import services
 from .models import Player, Session
 
@@ -123,9 +124,11 @@ def firebase_exchange(request):
                 if sess and not sess.player.retired and not sess.player.provider:
                     guest = Player.objects.select_for_update().get(pk=sess.player_id)
 
+            linked_guest = False
             if existing:
                 player = existing
                 if guest and guest.pk != player.pk:
+                    linked_guest = True
                     player.tokens += guest.tokens
                     player.wins += guest.wins
                     player.games_played += guest.games_played
@@ -163,6 +166,11 @@ def firebase_exchange(request):
             Session.objects.create(token=token, player=player)
     except IntegrityError:
         return Response({"error": "identity_conflict"}, status=409)
+
+    analytics.capture("user_signed_in", player, properties={
+        "method": "google",
+        "linked_guest": linked_guest,
+    })
 
     available_at = _username_change_available_at(player)
     return Response({

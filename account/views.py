@@ -7,6 +7,7 @@ from django.utils import timezone
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
+from . import analytics
 from .models import Player, Session, StrikeBet
 from . import services
 
@@ -155,6 +156,7 @@ def register(request):
         return Response({"error": "username_taken"}, status=409)
     payload = _profile_payload(player)
     payload["token"] = token
+    analytics.capture("user_registered", player, properties={"method": "server"})
     return Response(payload)
 
 
@@ -199,7 +201,9 @@ def change_username(request):
     except IntegrityError:
         return Response({"error": "username_taken"}, status=409)
 
-    return Response(_profile_payload(locked))
+    payload = _profile_payload(locked)
+    analytics.capture("username_changed", locked)
+    return Response(payload)
 
 
 @api_view(["POST"])
@@ -217,7 +221,9 @@ def change_country(request):
         locked.country_code = country_code
         locked.save(update_fields=["country_code"])
 
-    return Response(_profile_payload(locked))
+    payload = _profile_payload(locked)
+    analytics.capture("flag_changed", locked, properties={"country_code": country_code})
+    return Response(payload)
 
 
 # ----------------------------- game ------------------------------------------
@@ -281,6 +287,14 @@ def place_bet(request):
     except IntegrityError:
         return Response({"error": "bet_pending"}, status=409)
 
+    analytics.capture("bet_placed", locked, properties={
+        "bet_id": bet.id,
+        "side": side,
+        "amount": amount,
+        "scope": scope_kind,
+        "scope_id": scope_id,
+        "prev_count": prev,
+    })
     return Response({"betId": str(bet.id), "roundId": round_id, "tokens": new_balance})
 
 
@@ -322,10 +336,12 @@ def claim_tokens(request):
         return Response(status=401)
     with transaction.atomic():
         locked = Player.objects.select_for_update().get(pk=player.pk)
+        claimed = locked.tokens <= 0
         if locked.tokens <= 0:  # anti-abuse: only top up at zero
             locked.tokens = services.START_TOKENS
             locked.save(update_fields=["tokens"])
         payload = _profile_payload(locked)
+    analytics.capture("tokens_claimed", locked, properties={"claimed": claimed})
     return Response(payload)
 
 
