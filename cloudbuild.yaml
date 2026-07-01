@@ -47,8 +47,8 @@ steps:
       - --region=${_REGION}
       - --platform=managed
       - --service-account=${_RUNTIME_SA}
-      - --no-allow-unauthenticated
-      - --iap
+      - --allow-unauthenticated
+      - --no-iap
       - --port=8000
       - --memory=1Gi
       - --cpu=1
