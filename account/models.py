@@ -14,6 +14,7 @@ class Player(models.Model):
     tokens = models.IntegerField(default=100)
     provider = models.CharField(max_length=20, blank=True, default="")
     provider_subject = models.CharField(max_length=255, blank=True, default="")
+    country_code = models.CharField(max_length=2, blank=True, default="")
     wins = models.IntegerField(default=0)
     games_played = models.IntegerField(default=0)
     retired = models.BooleanField(default=False)  # merged guest accounts

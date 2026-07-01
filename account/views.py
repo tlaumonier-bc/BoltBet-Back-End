@@ -2,6 +2,7 @@ import secrets
 from datetime import timedelta
 
 from django.db import IntegrityError, transaction
+from django.db.models import Q
 from django.utils import timezone
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
@@ -12,6 +13,13 @@ from . import services
 
 USERNAME_CHANGE_DAYS = 30
 VERIFIED_PROVIDERS = {"firebase_google", "google"}
+TROPHIES = [
+    {"key": "bronze", "points": 200, "image": "trophy-200.png", "label": "Bronze Trophy"},
+    {"key": "silver", "points": 500, "image": "trophy-500.png", "label": "Silver Trophy"},
+    {"key": "gold", "points": 1000, "image": "trophy-1000.png", "label": "Gold Trophy"},
+    {"key": "diamond", "points": 10_000, "image": "trophy-10000.png", "label": "Diamond Trophy"},
+    {"key": "legend", "points": 100_000, "image": "trophy-100000.png", "label": "Legend Trophy"},
+]
 
 
 def _player_from_request(request):
@@ -33,6 +41,52 @@ def _is_verified(player):
     return player.provider in VERIFIED_PROVIDERS
 
 
+def _clean_country_code(value):
+    raw = str(value or "").strip().upper()
+    return raw if len(raw) == 2 and raw.isalpha() else ""
+
+
+def _highest_trophy(tokens):
+    earned = None
+    for trophy in TROPHIES:
+        if tokens >= trophy["points"]:
+            earned = trophy
+        else:
+            break
+    return earned
+
+
+def _next_trophy(tokens):
+    for trophy in TROPHIES:
+        if tokens < trophy["points"]:
+            return trophy
+    return None
+
+
+def _leaderboard_row(player, rank=None):
+    return {
+        "rank": rank,
+        "username": player.username,
+        "tokens": player.tokens,
+        "wins": player.wins,
+        "gamesPlayed": player.games_played,
+        "verified": _is_verified(player),
+        "country": player.country_code,
+        "trophy": _highest_trophy(player.tokens),
+    }
+
+
+def _trophy_payloads():
+    base = Player.objects.filter(retired=False)
+    return [
+        {
+            **trophy,
+            "achievedCount": base.filter(tokens__gte=trophy["points"]).count(),
+        }
+        for trophy in TROPHIES
+    ]
+
+
 def _username_change_available_at(player):
     if not player.username_changed_at:
         return None
@@ -50,6 +104,7 @@ def _profile_payload(player):
         "username": player.username,
         "tokens": player.tokens,
         "verified": _is_verified(player),
+        "country": player.country_code,
         "canChangeUsername": _can_change_username(player),
         "usernameChangeAvailableAt": available_at.isoformat() if available_at else None,
     }
@@ -80,6 +135,7 @@ def username_available(request):
 @api_view(["POST"])
 def register(request):
     name = (request.data.get("username") or "").strip()
+    country_code = _clean_country_code(request.data.get("countryCode"))
     if name and not services.USERNAME_RE.match(name):
         return Response({"error": "invalid_username"}, status=400)
     if not name:
@@ -91,6 +147,7 @@ def register(request):
                 return Response({"error": "username_taken"}, status=409)
             player = Player.objects.create(
                 username=name, username_lower=lower, tokens=services.START_TOKENS,
+                country_code=country_code,
             )
             token = secrets.token_urlsafe(32)
             Session.objects.create(token=token, player=player)
@@ -265,9 +322,66 @@ def leaderboard(request):
     limit = max(1, min(limit, 200))
     rows = (Player.objects.filter(retired=False)
             .order_by("-tokens", "id")[:limit])
-    return Response([
-        {"username": p.username, "tokens": p.tokens,
-         "wins": p.wins, "gamesPlayed": p.games_played,
-         "verified": _is_verified(p)}
-        for p in rows
-    ])
+    return Response([_leaderboard_row(p) for p in rows])
+
+
+@api_view(["GET"])
+def leaderboard_summary(request):
+    try:
+        limit = int(request.GET.get("limit", 50))
+    except ValueError:
+        limit = 50
+    limit = max(1, min(limit, 200))
+    players = Player.objects.filter(retired=False).order_by("-tokens", "id")[:limit]
+    rows = [_leaderboard_row(player, rank=index + 1) for index, player in enumerate(players)]
+    return Response({
+        "entries": rows,
+        "trophies": _trophy_payloads(),
+        "totalPlayers": Player.objects.filter(retired=False).count(),
+    })
+
+
+@api_view(["GET"])
+def leaderboard_context(request):
+    player = _player_from_request(request)
+    if player is None:
+        return Response(status=401)
+
+    above_count = Player.objects.filter(retired=False).filter(
+        Q(tokens__gt=player.tokens)
+        | (Q(tokens=player.tokens) & Q(id__lt=player.id))
+    ).count()
+    current_rank = above_count + 1
+
+    above = (
+        Player.objects.filter(retired=False)
+        .filter(
+            Q(tokens__gt=player.tokens)
+            | (Q(tokens=player.tokens) & Q(id__lt=player.id))
+        )
+        .order_by("tokens", "-id")
+        .first()
+    )
+    below = (
+        Player.objects.filter(retired=False)
+        .filter(
+            Q(tokens__lt=player.tokens)
+            | (Q(tokens=player.tokens) & Q(id__gt=player.id))
+        )
+        .order_by("-tokens", "id")
+        .first()
+    )
+
+    rows = []
+    if above:
+        rows.append(_leaderboard_row(above, current_rank - 1))
+    rows.append(_leaderboard_row(player, current_rank))
+    if below:
+        rows.append(_leaderboard_row(below, current_rank + 1))
+
+    return Response({
+        "rows": rows,
+        "currentRank": current_rank,
+        "nextTrophy": _next_trophy(player.tokens),
+        "trophies": _trophy_payloads(),
+    })

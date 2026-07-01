@@ -21,6 +21,11 @@ VERIFIED_FIREBASE_PROVIDERS = {"google.com": FIREBASE_GOOGLE_PROVIDER}
 USERNAME_CHANGE_DAYS = 30
 
 
+def _clean_country_code(value):
+    raw = str(value or "").strip().upper()
+    return raw if len(raw) == 2 and raw.isalpha() else ""
+
+
 def _username_change_available_at(player):
     if not player.username_changed_at:
         return None
@@ -68,6 +73,7 @@ def _legacy_google_subject(decoded_token):
 def firebase_exchange(request):
     id_token = (request.data.get("idToken") or "").strip()
     link_token = (request.data.get("linkToken") or "").strip()
+    country_code = _clean_country_code(request.data.get("countryCode"))
     if not id_token:
         return Response({"error": "missing_id_token"}, status=400)
 
@@ -123,15 +129,24 @@ def firebase_exchange(request):
                     player.tokens += guest.tokens
                     player.wins += guest.wins
                     player.games_played += guest.games_played
+                    if country_code and not player.country_code:
+                        player.country_code = country_code
+                    elif guest.country_code and not player.country_code:
+                        player.country_code = guest.country_code
                     guest.bets.update(player=player)
                     guest.retired = True
                     guest.username_lower = f"_r{guest.pk}"[:20]
                     guest.save(update_fields=["retired", "username_lower"])
-                    player.save(update_fields=["tokens", "wins", "games_played"])
+                    player.save(update_fields=["tokens", "wins", "games_played", "country_code"])
+                elif country_code and not player.country_code:
+                    player.country_code = country_code
+                    player.save(update_fields=["country_code"])
             elif guest:
                 guest.provider = provider
                 guest.provider_subject = firebase_uid
-                guest.save(update_fields=["provider", "provider_subject"])
+                if country_code and not guest.country_code:
+                    guest.country_code = country_code
+                guest.save(update_fields=["provider", "provider_subject", "country_code"])
                 player = guest
             else:
                 username = _unique_username(_random_username())
@@ -141,6 +156,7 @@ def firebase_exchange(request):
                     tokens=services.START_TOKENS,
                     provider=provider,
                     provider_subject=firebase_uid,
+                    country_code=country_code,
                 )
 
             token = secrets.token_urlsafe(32)
@@ -154,6 +170,7 @@ def firebase_exchange(request):
         "token": token,
         "tokens": player.tokens,
         "verified": True,
+        "country": player.country_code,
         "canChangeUsername": available_at is None or timezone.now() >= available_at,
         "usernameChangeAvailableAt": available_at.isoformat() if available_at else None,
     })

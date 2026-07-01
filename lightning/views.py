@@ -111,15 +111,26 @@ def strikes_per_minute(request):
 
 @api_view(["GET"])
 def country_strikes(request):
-    limit = min(int(request.GET.get("limit", 1000)), 1000)
+    limit = min(int(request.GET.get("limit", 5000)), 5000)
     country = request.GET.get("country")
 
     if country:
+        cc = country.upper()
+        since = timezone.now() - timedelta(hours=1)
+        last_hour = CountryStrike.objects.filter(country=cc, received_at__gte=since).count()
         rows = (CountryStrike.objects
-                .filter(country=country.upper())
+                .filter(country=cc)
                 .order_by("-received_at")
                 .values("lat", "lon", "timestamp", "quality", "received_at")[:limit])
-        return Response({country.upper(): list(rows)})
+        return Response({
+            cc: list(rows),
+            "_meta": {
+                "country": cc,
+                "limit": limit,
+                "lastHour": last_hour,
+                "cappedLastHour": last_hour > limit,
+            },
+        })
 
     sql = """
         SELECT country, lat, lon, timestamp, quality, received_at FROM (

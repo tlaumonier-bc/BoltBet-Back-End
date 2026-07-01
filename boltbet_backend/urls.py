@@ -9,7 +9,8 @@ from lightning.views import (
 )
 from account.views import (
     username_available, register, profile,
-    change_username, place_bet, bet_result, claim_tokens, leaderboard,
+    change_username, place_bet, bet_result, claim_tokens,
+    leaderboard, leaderboard_summary, leaderboard_context,
 )
 from account.firebase_auth import firebase_exchange
 from account.oauth import oauth_start, oauth_callback
@@ -47,6 +48,8 @@ api_urlpatterns = [
     path("game/bet/<int:bet_id>/result/", bet_result),
     path("game/claim/", claim_tokens),
     path("game/leaderboard/", leaderboard),
+    path("game/leaderboard/summary/", leaderboard_summary),
+    path("game/leaderboard/context/", leaderboard_context),
 
     # --- OAuth (Google to start; extensible) ---
     path("auth/firebase/", firebase_exchange),
