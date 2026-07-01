@@ -3,6 +3,7 @@ import email.utils
 import html
 import os
 import re
+import time
 import urllib.request
 import urllib.parse
 import json
@@ -110,15 +111,26 @@ def strikes_per_minute(request):
 
 @api_view(["GET"])
 def country_strikes(request):
-    limit = min(int(request.GET.get("limit", 1000)), 1000)
+    limit = min(int(request.GET.get("limit", 5000)), 5000)
     country = request.GET.get("country")
 
     if country:
+        cc = country.upper()
+        since = timezone.now() - timedelta(hours=1)
+        last_hour = CountryStrike.objects.filter(country=cc, received_at__gte=since).count()
         rows = (CountryStrike.objects
-                .filter(country=country.upper())
+                .filter(country=cc)
                 .order_by("-received_at")
                 .values("lat", "lon", "timestamp", "quality", "received_at")[:limit])
-        return Response({country.upper(): list(rows)})
+        return Response({
+            cc: list(rows),
+            "_meta": {
+                "country": cc,
+                "limit": limit,
+                "lastHour": last_hour,
+                "cappedLastHour": last_hour > limit,
+            },
+        })
 
     sql = """
         SELECT country, lat, lon, timestamp, quality, received_at FROM (
@@ -216,9 +228,45 @@ def country_news(request):
 
 
 OWM_KEY = os.environ.get("OWM_API_KEY")  # server-only, NO NEXT_PUBLIC_
+OWM_RATE_LIMIT_PER_MINUTE = int(os.environ.get("OWM_RATE_LIMIT_PER_MINUTE", "59"))
+OWM_NOW_CACHE_SECONDS = int(os.environ.get("OWM_NOW_CACHE_SECONDS", "600"))
+OWM_TILE_CACHE_SECONDS = int(os.environ.get("OWM_TILE_CACHE_SECONDS", "1800"))
 
 # Allowlist so the proxy can't be abused to fetch arbitrary OWM layers/paths.
 OWM_TILE_LAYERS = {"clouds_new", "precipitation_new", "temp_new", "wind_new"}
+
+
+def _owm_rate_limited_response():
+    return JsonResponse(
+        {
+            "error": "owm_rate_limited",
+            "detail": "OpenWeatherMap free-plan limit protected; retry shortly.",
+        },
+        status=429,
+        headers={"Retry-After": "60"},
+    )
+
+
+def _allow_owm_miss():
+    """
+    Count only cache misses that would hit OpenWeatherMap. With Redis cache this
+    is shared across Cloud Run requests/users and keeps the key below 60 rpm.
+    """
+    if OWM_RATE_LIMIT_PER_MINUTE <= 0:
+        return True
+
+    minute = int(time.time() // 60)
+    key = f"owm:rpm:{minute}"
+    added = cache.add(key, 1, 120)
+    if added:
+        return True
+
+    try:
+        count = cache.incr(key)
+    except ValueError:
+        cache.set(key, 1, 120)
+        return True
+    return count <= OWM_RATE_LIMIT_PER_MINUTE
 
 
 @api_view(["GET"])
@@ -235,6 +283,9 @@ def weather_now(request):
     cached = cache.get(ckey)
     if cached:
         return Response(cached)
+
+    if not _allow_owm_miss():
+        return _owm_rate_limited_response()
 
     q = urllib.parse.urlencode({"lat": lat, "lon": lon, "units": "metric", "appid": OWM_KEY})
     url = f"https://api.openweathermap.org/data/2.5/weather?{q}"
@@ -253,7 +304,7 @@ def weather_now(request):
         "icon": (d.get("weather") or [{}])[0].get("icon", ""),
         "country": d.get("sys", {}).get("country"),
     }
-    cache.set(ckey, out, 300)  # 5 min
+    cache.set(ckey, out, OWM_NOW_CACHE_SECONDS)
     return Response(out)
 
 
@@ -273,16 +324,19 @@ def weather_tile(request, layer, z, x, y):
     ckey = f"owmtile:{layer}:{z}:{x}:{y}"
     data = cache.get(ckey)
     if data is None:
+        if not _allow_owm_miss():
+            return _owm_rate_limited_response()
+
         url = f"https://tile.openweathermap.org/map/{layer}/{z}/{x}/{y}.png?appid={OWM_KEY}"
         try:
             with urllib.request.urlopen(url, timeout=8) as r:
                 data = r.read()
         except Exception:
             return JsonResponse({"error": "owm_tile_failed"}, status=502)
-        cache.set(ckey, data, 600)  # 10 min
+        cache.set(ckey, data, OWM_TILE_CACHE_SECONDS)
 
     resp = HttpResponse(data, content_type="image/png")
-    resp["Cache-Control"] = "public, max-age=600"
+    resp["Cache-Control"] = f"public, max-age={OWM_TILE_CACHE_SECONDS}"
     return resp
 
 

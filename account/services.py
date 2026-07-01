@@ -1,13 +1,10 @@
 """
-Up/Down game rules. Timing is anchored to wall-clock (epoch ms, UTC), matching
-lib/game/useStrikeGame.ts on the client.
+Up/Down game rules.
 
-  cycle c spans [c*40000, c*40000+40000):
-    game window = [c*40000, c*40000+30000)  -> strikes counted (half-open)
-    buffer      = [c*40000+30000, c*40000+40000)  -> betting open for game c+1
-
-Strikes are counted by `received_at` (the ingest time the globe draws), so the
-resolver agrees with what the strike feeds expose.
+Each bet opens its own 30-second counting window at placement time. The baseline
+is the previous 30 seconds for the same scope, snapshotted when the bet is
+created. Strikes are counted by `received_at` (the ingest time the globe draws),
+so the resolver agrees with what the strike feeds expose.
 """
 
 import datetime as dt
@@ -17,11 +14,10 @@ from django.db import transaction
 from django.utils import timezone
 
 from lightning.models import LightningStrike, CountryStrike
+from . import analytics
 from .models import Player, StrikeBet
 
 GAME_MS = 30_000
-BUFFER_MS = 10_000
-CYCLE_MS = 40_000
 PAYOUT_MULTIPLIER = 2
 START_TOKENS = 100
 USERNAME_RE = re.compile(r"^[a-zA-Z0-9_-]{3,20}$")
@@ -35,20 +31,17 @@ def _ms_to_dt(ms: int) -> dt.datetime:
     return dt.datetime.fromtimestamp(ms / 1000, tz=dt.timezone.utc)
 
 
-def count_window(scope_kind: str, scope_id: str, round_id: int) -> int:
-    """Strike count in the game window of `round_id`, for the given scope."""
-    lo_ms = round_id * CYCLE_MS
-    lo = _ms_to_dt(lo_ms)
-    hi = _ms_to_dt(lo_ms + GAME_MS)  # half-open [lo, hi)
+def count_between(scope_kind: str, scope_id: str, start, end) -> int:
+    """Strike count in the half-open [start, end) window for the given scope."""
     if scope_kind == "country":
         return CountryStrike.objects.filter(
             country=scope_id.upper(),
-            received_at__gte=lo,
-            received_at__lt=hi,
+            received_at__gte=start,
+            received_at__lt=end,
         ).count()
     return LightningStrike.objects.filter(
-        received_at__gte=lo,
-        received_at__lt=hi,
+        received_at__gte=start,
+        received_at__lt=end,
     ).count()
 
 
@@ -92,11 +85,14 @@ def settle_bet(bet_id):
         return None
     if bet.status == "settled":
         return bet
-    if now_ms() < bet.round_id * CYCLE_MS + GAME_MS:
+
+    window_start = bet.placed_at
+    window_end = window_start + dt.timedelta(milliseconds=GAME_MS)
+    if timezone.now() < window_end:
         return None  # window not closed yet
 
-    prev = count_window(bet.scope_kind, bet.scope_id, bet.round_id - 1)
-    final = count_window(bet.scope_kind, bet.scope_id, bet.round_id)
+    prev = bet.prev_count
+    final = count_between(bet.scope_kind, bet.scope_id, window_start, window_end)
     outcome = outcome_for(bet.side, prev, final)
     payout = payout_for(outcome, bet.amount)
 
@@ -116,4 +112,14 @@ def settle_bet(bet_id):
     bet.save(update_fields=[
         "prev_count", "final_count", "outcome", "payout", "status", "settled_at",
     ])
+    analytics.capture("bet_resolved", player, properties={
+        "bet_id": bet.id,
+        "outcome": outcome,
+        "amount": bet.amount,
+        "payout": payout,
+        "scope": bet.scope_kind,
+        "scope_id": bet.scope_id,
+        "prev_count": prev,
+        "final_count": final,
+    })
     return bet

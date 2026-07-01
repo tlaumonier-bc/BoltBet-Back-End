@@ -11,6 +11,22 @@ from django.core.exceptions import ImproperlyConfigured
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
+def _load_local_env():
+    env_path = BASE_DIR / ".env"
+    if not env_path.exists():
+        return
+
+    for raw_line in env_path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+_load_local_env()
+
+
 def _env_bool(name, default=False):
     return os.environ.get(name, str(default)).lower() in ("1", "true", "yes", "on")
 
@@ -172,16 +188,39 @@ REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.environ.get("REDIS_PORT", "6379"))
 REDIS_PASSWORD = os.environ.get("REDIS_PASSWORD", "")
 
-if REDIS_PASSWORD:
-    _redis_url = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}"
-else:
-    _redis_url = f"redis://{REDIS_HOST}:{REDIS_PORT}"
+USE_REDIS_CHANNEL_LAYER = IS_PRODUCTION or _env_bool("DJANGO_USE_REDIS_CHANNEL_LAYER", False)
 
-CHANNEL_LAYERS = {
-    'default': {
-        'BACKEND': 'channels_redis.core.RedisChannelLayer',
-        'CONFIG': {
-            "hosts": [_redis_url],
+if USE_REDIS_CHANNEL_LAYER:
+    if REDIS_PASSWORD:
+        _redis_url = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}"
+    else:
+        _redis_url = f"redis://{REDIS_HOST}:{REDIS_PORT}"
+
+    CHANNEL_LAYERS = {
+        'default': {
+            'BACKEND': 'channels_redis.core.RedisChannelLayer',
+            'CONFIG': {
+                "hosts": [_redis_url],
+            },
         },
-    },
-}
+    }
+
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": f"{_redis_url}/1",
+        }
+    }
+else:
+    CHANNEL_LAYERS = {
+        'default': {
+            'BACKEND': 'channels.layers.InMemoryChannelLayer',
+        },
+    }
+
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "boltbet-local-cache",
+        }
+    }
