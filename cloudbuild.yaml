@@ -1,8 +1,8 @@
 substitutions:
   _REGION: europe-west2
   _REPO: vibe-apps
-  _SERVICE: boltbet-backend-web
-  _IMAGE: boltbet-backend
+  _SERVICE: boltbet-backend-dev
+  _IMAGE: boltbet-backend-dev
   _RUNTIME_SA: vibe-app-runtime@blockchain-gemini.iam.gserviceaccount.com
   _CLOUDSQL_INSTANCE: blockchain-gemini:europe-west2:vibe-postgres-prod
   _CORS_ALLOWED_ORIGINS: https://boltbet-frontend-web-2ulnbyw42a-nw.a.run.app,https://lightningmapsgame.com,https://www.lightningmapsgame.com,https://lightningmapgame.com,https://www.lightningmapgame.com
@@ -39,6 +39,7 @@ steps:
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     entrypoint: gcloud
     args:
+      - beta
       - run
       - deploy
       - ${_SERVICE}
@@ -47,6 +48,7 @@ steps:
       - --platform=managed
       - --service-account=${_RUNTIME_SA}
       - --allow-unauthenticated
+      - --no-iap
       - --port=8000
       - --memory=1Gi
       - --cpu=1

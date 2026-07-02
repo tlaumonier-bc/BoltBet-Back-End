@@ -15,11 +15,11 @@ from . import services
 USERNAME_CHANGE_DAYS = 30
 VERIFIED_PROVIDERS = {"firebase_google", "google"}
 TROPHIES = [
-    {"key": "bronze", "points": 200, "image": "trophy-200.png", "label": "Bronze Trophy"},
-    {"key": "silver", "points": 500, "image": "trophy-500.png", "label": "Silver Trophy"},
-    {"key": "gold", "points": 1000, "image": "trophy-1000.png", "label": "Gold Trophy"},
-    {"key": "diamond", "points": 10_000, "image": "trophy-10000.png", "label": "Diamond Trophy"},
-    {"key": "legend", "points": 100_000, "image": "trophy-100000.png", "label": "Legend Trophy"},
+    {"key": "bolt-tracker", "points": 200, "image": "trophy-200.png", "label": "Bolt Tracker Trophy"},
+    {"key": "could-reader", "points": 500, "image": "trophy-500.png", "label": "Could Reader Trophy"},
+    {"key": "strike-predictor", "points": 1000, "image": "trophy-1000.png", "label": "Strike predictor Trophy"},
+    {"key": "tempest-watcher", "points": 10_000, "image": "trophy-10000.png", "label": "Tempest Watcher Trophy"},
+    {"key": "lightning-lord", "points": 100_000, "image": "trophy-100000.png", "label": "Lightning Lord Trophy"},
 ]
 
 
