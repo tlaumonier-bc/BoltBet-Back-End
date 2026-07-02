@@ -4,8 +4,8 @@ substitutions:
   _SERVICE: boltbet-backend-dev
   _IMAGE: boltbet-backend-dev
   _RUNTIME_SA: vibe-app-runtime@blockchain-gemini.iam.gserviceaccount.com
-  _CLOUDSQL_INSTANCE: blockchain-gemini:europe-west2:vibe-postgres-dev
-  _CORS_ALLOWED_ORIGINS: https://boltbet-frontend-dev-2ulnbyw42a-nw.a.run.app
+  _CLOUDSQL_INSTANCE: blockchain-gemini:europe-west2:vibe-postgres-prod
+  _CORS_ALLOWED_ORIGINS: https://boltbet-frontend-web-2ulnbyw42a-nw.a.run.app,https://lightningmapsgame.com,https://www.lightningmapsgame.com,https://lightningmapgame.com,https://www.lightningmapgame.com
   _FIREBASE_PROJECT_ID: blockchain-gemini
   _POSTHOG_PROJECT_TOKEN: phc_wJsYdcjNAwHdBdcbJngPR6oVhdb7ksDmBp3qqAu2EKnS
   _POSTHOG_HOST: https://eu.i.posthog.com
@@ -59,7 +59,7 @@ steps:
       - --subnet=default
       - --vpc-egress=private-ranges-only
       - --set-env-vars=^@^DJANGO_ENV=production@DJANGO_BEHIND_PROXY=true@DJANGO_DEBUG=false@DJANGO_ALLOWED_HOSTS=*@DJANGO_CSRF_TRUSTED_ORIGINS=${_CORS_ALLOWED_ORIGINS}@CORS_ALLOWED_ORIGINS=${_CORS_ALLOWED_ORIGINS}@FIREBASE_PROJECT_ID=${_FIREBASE_PROJECT_ID}@POSTHOG_PROJECT_TOKEN=${_POSTHOG_PROJECT_TOKEN}@POSTHOG_HOST=${_POSTHOG_HOST}@RUN_INGEST_IN_PROCESS=true@RUN_PURGE_IN_PROCESS=true@RUN_TRIM_IN_PROCESS=true@RUN_RESOLVER_IN_PROCESS=true@DB_PORT=5432@REDIS_PORT=6379
-      - --set-secrets=DJANGO_SECRET_KEY=boltbet-django-secret-key:latest,OWM_API_KEY=boltbet-owm-api-key:latest,DB_HOST=boltbet-dev-db-host:latest,DB_NAME=boltbet-dev-db-name:latest,DB_USER=boltbet-dev-db-user:latest,DB_PASSWORD=boltbet-dev-db-password:latest,REDIS_HOST=boltbet-dev-redis-host:latest,REDIS_PASSWORD=boltbet-dev-redis-password:latest,GOOGLE_OAUTH_CLIENT_ID=boltbet-google-oauth-client-id:latest,GOOGLE_OAUTH_CLIENT_SECRET=boltbet-google-oauth-client-secret:latest
+      - --set-secrets=DJANGO_SECRET_KEY=boltbet-django-secret-key:latest,OWM_API_KEY=boltbet-owm-api-key:latest,DB_HOST=boltbet-prod-db-host:latest,DB_NAME=boltbet-prod-db-name:latest,DB_USER=boltbet-prod-db-user:latest,DB_PASSWORD=boltbet-prod-db-password:latest,REDIS_HOST=boltbet-prod-redis-host:latest,REDIS_PASSWORD=boltbet-prod-redis-password:latest,GOOGLE_OAUTH_CLIENT_ID=boltbet-google-oauth-client-id:latest,GOOGLE_OAUTH_CLIENT_SECRET=boltbet-google-oauth-client-secret:latest
 
 images:
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:$COMMIT_SHA
