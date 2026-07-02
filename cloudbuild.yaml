@@ -1,0 +1,102 @@
+steps:
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    id: configure-deployment
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        case "$BRANCH_NAME" in
+          deploy/dev)
+            cat > /workspace/deploy.env <<'ENV'
+        REGION=europe-west2
+        REPO=vibe-apps
+        SERVICE=boltbet-backend-dev
+        IMAGE=boltbet-backend-dev
+        RUNTIME_SA=vibe-app-runtime@blockchain-gemini.iam.gserviceaccount.com
+        CLOUDSQL_INSTANCE=blockchain-gemini:europe-west2:vibe-postgres-prod
+        CORS_ALLOWED_ORIGINS=https://boltbet-frontend-web-2ulnbyw42a-nw.a.run.app,https://lightningmapsgame.com,https://www.lightningmapsgame.com,https://lightningmapgame.com,https://www.lightningmapgame.com
+        FIREBASE_PROJECT_ID=blockchain-gemini
+        POSTHOG_PROJECT_TOKEN=phc_wJsYdcjNAwHdBdcbJngPR6oVhdb7ksDmBp3qqAu2EKnS
+        POSTHOG_HOST=https://eu.i.posthog.com
+        DISABLE_IAP=true
+        ENV
+            ;;
+          deploy/prod)
+            cat > /workspace/deploy.env <<'ENV'
+        REGION=europe-west2
+        REPO=vibe-apps
+        SERVICE=boltbet-backend-web
+        IMAGE=boltbet-backend
+        RUNTIME_SA=vibe-app-runtime@blockchain-gemini.iam.gserviceaccount.com
+        CLOUDSQL_INSTANCE=blockchain-gemini:europe-west2:vibe-postgres-prod
+        CORS_ALLOWED_ORIGINS=https://boltbet-frontend-web-2ulnbyw42a-nw.a.run.app,https://lightningmapsgame.com,https://www.lightningmapsgame.com,https://lightningmapgame.com,https://www.lightningmapgame.com
+        FIREBASE_PROJECT_ID=blockchain-gemini
+        POSTHOG_PROJECT_TOKEN=phc_wJsYdcjNAwHdBdcbJngPR6oVhdb7ksDmBp3qqAu2EKnS
+        POSTHOG_HOST=https://eu.i.posthog.com
+        DISABLE_IAP=false
+        ENV
+            ;;
+          *)
+            echo "Unsupported deployment branch: $BRANCH_NAME"
+            echo "This build config only deploys from deploy/dev or deploy/prod."
+            exit 1
+            ;;
+        esac
+
+  - name: gcr.io/cloud-builders/docker
+    id: build-image
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        source /workspace/deploy.env
+        test -n "$${CORS_ALLOWED_ORIGINS}" || { echo "CORS_ALLOWED_ORIGINS is required"; exit 1; }
+        test -n "$${CLOUDSQL_INSTANCE}" || { echo "CLOUDSQL_INSTANCE is required"; exit 1; }
+        docker build \
+          -t "$${REGION}-docker.pkg.dev/$PROJECT_ID/$${REPO}/$${IMAGE}:$COMMIT_SHA" \
+          -t "$${REGION}-docker.pkg.dev/$PROJECT_ID/$${REPO}/$${IMAGE}:latest" \
+          -f Dockerfile \
+          .
+
+  - name: gcr.io/cloud-builders/docker
+    id: push-image
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        source /workspace/deploy.env
+        docker push --all-tags "$${REGION}-docker.pkg.dev/$PROJECT_ID/$${REPO}/$${IMAGE}"
+
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    id: deploy-service
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        source /workspace/deploy.env
+        iap_args=()
+        if [ "$${DISABLE_IAP}" = "true" ]; then
+          iap_args=(--no-iap)
+        fi
+
+        gcloud beta run deploy "$${SERVICE}" \
+          --image="$${REGION}-docker.pkg.dev/$PROJECT_ID/$${REPO}/$${IMAGE}:$COMMIT_SHA" \
+          --region="$${REGION}" \
+          --platform=managed \
+          --service-account="$${RUNTIME_SA}" \
+          --allow-unauthenticated \
+          "$${iap_args[@]}" \
+          --port=8000 \
+          --memory=1Gi \
+          --cpu=1 \
+          --min-instances=0 \
+          --max-instances=1 \
+          --set-cloudsql-instances="$${CLOUDSQL_INSTANCE}" \
+          --network=default \
+          --subnet=default \
+          --vpc-egress=private-ranges-only \
+          "--set-env-vars=^@^DJANGO_ENV=production@DJANGO_BEHIND_PROXY=true@DJANGO_DEBUG=false@DJANGO_ALLOWED_HOSTS=*@DJANGO_CSRF_TRUSTED_ORIGINS=$${CORS_ALLOWED_ORIGINS}@CORS_ALLOWED_ORIGINS=$${CORS_ALLOWED_ORIGINS}@FIREBASE_PROJECT_ID=$${FIREBASE_PROJECT_ID}@POSTHOG_PROJECT_TOKEN=$${POSTHOG_PROJECT_TOKEN}@POSTHOG_HOST=$${POSTHOG_HOST}@RUN_INGEST_IN_PROCESS=true@RUN_PURGE_IN_PROCESS=true@RUN_TRIM_IN_PROCESS=true@RUN_RESOLVER_IN_PROCESS=true@DB_PORT=5432@REDIS_PORT=6379" \
+          --set-secrets=DJANGO_SECRET_KEY=boltbet-django-secret-key:latest,OWM_API_KEY=boltbet-owm-api-key:latest,DB_HOST=boltbet-prod-db-host:latest,DB_NAME=boltbet-prod-db-name:latest,DB_USER=boltbet-prod-db-user:latest,DB_PASSWORD=boltbet-prod-db-password:latest,REDIS_HOST=boltbet-prod-redis-host:latest,REDIS_PASSWORD=boltbet-prod-redis-password:latest,GOOGLE_OAUTH_CLIENT_ID=boltbet-google-oauth-client-id:latest,GOOGLE_OAUTH_CLIENT_SECRET=boltbet-google-oauth-client-secret:latest
+
+options:
+  logging: CLOUD_LOGGING_ONLY
