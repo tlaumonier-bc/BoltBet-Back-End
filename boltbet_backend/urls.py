@@ -1,10 +1,10 @@
 """URL configuration for boltbet_backend."""
 from django.contrib import admin
 from django.urls import include, path
-from django.http import HttpResponse
+from django.http import JsonResponse, HttpResponse
 
 from lightning.views import (
-    country_strikes, recent_strikes, strikes_per_minute,
+    country_strikes, nearby_strikes, recent_strikes, strikes_per_minute,
     weather_now, weather_tile, strikes_count, country_news,
 )
 from account.views import (
@@ -21,12 +21,32 @@ def health(request):
     return HttpResponse("ok", content_type="text/plain", status=200)
 
 
+def api_root(request):
+    response = JsonResponse({
+        "name": "Lightning Map Game API",
+        "status": "ok",
+        "documentation": "/api/",
+    })
+    response["X-Robots-Tag"] = "noindex, nofollow"
+    return response
+
+
+def robots_txt(request):
+    response = HttpResponse(
+        "User-agent: *\nDisallow: /\n",
+        content_type="text/plain",
+    )
+    response["X-Robots-Tag"] = "noindex, nofollow"
+    return response
+
+
 # Public REST API. Mounted under both /api/ and /public/api/ so it works whether
 # or not the ingress strips the /public prefix before the request reaches us.
 api_urlpatterns = [
     # --- Strike feeds ---
     path("strikes/by-country/", country_strikes),
     path("strikes/recent/", recent_strikes),
+    path("strikes/nearby/", nearby_strikes),
     path("strikes/per-minute/", strikes_per_minute),
     path("strikes/count/", strikes_count),
 
@@ -59,7 +79,9 @@ api_urlpatterns = [
 ]
 
 urlpatterns = [
+    path("", api_root),
     path("health", health),
+    path("robots.txt", robots_txt),
     path("admin/", admin.site.urls),
 
     path("api/", include(api_urlpatterns)),
