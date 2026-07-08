@@ -1,6 +1,7 @@
 from datetime import timedelta
 import email.utils
 import html
+import math
 import os
 import re
 import time
@@ -11,7 +12,7 @@ import datetime as dt
 import xml.etree.ElementTree as ET
 from django.utils import timezone
 from django.db import connection
-from django.db.models import Sum
+from django.db.models import Q, Sum
 from django.core.cache import cache
 from django.http import HttpResponse, JsonResponse
 from rest_framework.decorators import api_view
@@ -79,6 +80,92 @@ def recent_strikes(request):
         "older_than": older_than,
         "count": len(rows),
         "strikes": rows,
+    })
+
+
+EARTH_RADIUS_KM = 6371.0088
+
+
+def _normalize_lon(lon):
+    return ((lon + 180) % 360) - 180
+
+
+def _haversine_km(lat1, lon1, lat2, lon2):
+    lat1_rad = math.radians(lat1)
+    lat2_rad = math.radians(lat2)
+    dlat = lat2_rad - lat1_rad
+    dlon = math.radians(lon2 - lon1)
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon / 2) ** 2
+    )
+    return EARTH_RADIUS_KM * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+@api_view(["GET"])
+def nearby_strikes(request):
+    """
+    Nearest strikes to a user-provided location.
+
+    ?lat=48.85&lon=2.35&minutes=60&limit=30&radius_km=2500
+    """
+    try:
+        lat = float(request.GET["lat"])
+        lon = _normalize_lon(float(request.GET["lon"]))
+    except (KeyError, ValueError):
+        return Response({"error": "lat_lon_required"}, status=400)
+
+    if not (-90 <= lat <= 90):
+        return Response({"error": "bad_lat"}, status=400)
+
+    try:
+        minutes = min(max(int(request.GET.get("minutes", 60)), 1), 24 * 60)
+        limit = min(max(int(request.GET.get("limit", 30)), 1), 100)
+        radius_km = min(max(float(request.GET.get("radius_km", 2500)), 1), 20_000)
+    except ValueError:
+        return Response({"error": "bad_query"}, status=400)
+
+    since = timezone.now() - timedelta(minutes=minutes)
+    lat_delta = radius_km / 111.32
+    min_lat = max(-90, lat - lat_delta)
+    max_lat = min(90, lat + lat_delta)
+
+    qs = LightningStrike.objects.filter(
+        received_at__gte=since,
+        lat__gte=min_lat,
+        lat__lte=max_lat,
+    )
+
+    cos_lat = abs(math.cos(math.radians(lat)))
+    if cos_lat > 0.01 and lat_delta < 180:
+        lon_delta = min(180, radius_km / (111.32 * cos_lat))
+        min_lon = lon - lon_delta
+        max_lon = lon + lon_delta
+        if min_lon < -180 or max_lon > 180:
+            qs = qs.filter(
+                Q(lon__gte=_normalize_lon(min_lon)) | Q(lon__lte=_normalize_lon(max_lon))
+            )
+        else:
+            qs = qs.filter(lon__gte=min_lon, lon__lte=max_lon)
+
+    candidates = qs.values("lat", "lon", "quality", "timestamp", "received_at")
+    nearby = []
+    for row in candidates:
+        distance_km = _haversine_km(lat, lon, row["lat"], row["lon"])
+        if distance_km <= radius_km:
+            nearby.append({**row, "distance_km": round(distance_km, 1)})
+
+    nearby.sort(key=lambda row: (row["distance_km"], -row["received_at"].timestamp()))
+    strikes = nearby[:limit]
+
+    return Response({
+        "lat": lat,
+        "lon": lon,
+        "minutes": minutes,
+        "limit": limit,
+        "radius_km": radius_km,
+        "count": len(strikes),
+        "strikes": strikes,
     })
 
 

@@ -14,7 +14,7 @@ steps:
         IMAGE=boltbet-backend-dev
         RUNTIME_SA=vibe-app-runtime@blockchain-gemini.iam.gserviceaccount.com
         CLOUDSQL_INSTANCE=blockchain-gemini:europe-west2:vibe-postgres-prod
-        CORS_ALLOWED_ORIGINS=https://boltbet-frontend-web-2ulnbyw42a-nw.a.run.app,https://lightningmapsgame.com,https://www.lightningmapsgame.com,https://lightningmapgame.com,https://www.lightningmapgame.com
+        CORS_ALLOWED_ORIGINS=https://boltbet-frontend-dev-2ulnbyw42a-nw.a.run.app,https://boltbet-frontend-web-2ulnbyw42a-nw.a.run.app,https://lightningmapsgame.com,https://www.lightningmapsgame.com,https://lightningmapgame.com,https://www.lightningmapgame.com
         FIREBASE_PROJECT_ID=blockchain-gemini
         POSTHOG_PROJECT_TOKEN=phc_wJsYdcjNAwHdBdcbJngPR6oVhdb7ksDmBp3qqAu2EKnS
         POSTHOG_HOST=https://eu.i.posthog.com
