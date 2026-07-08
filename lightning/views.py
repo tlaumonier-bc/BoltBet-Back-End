@@ -169,6 +169,175 @@ def nearby_strikes(request):
     })
 
 
+def _clamp_int(value, default, min_value, max_value):
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return default
+    return min(max(n, min_value), max_value)
+
+
+def _cell_key(lat, lon, cell_deg):
+    lat_idx = math.floor((lat + 90) / cell_deg)
+    lon_idx = math.floor((_normalize_lon(lon) + 180) / cell_deg)
+    return lat_idx, lon_idx
+
+
+def _cell_bbox(lat_idx, lon_idx, cell_deg):
+    min_lat = max(-90, lat_idx * cell_deg - 90)
+    max_lat = min(90, min_lat + cell_deg)
+    min_lon = max(-180, lon_idx * cell_deg - 180)
+    max_lon = min(180, min_lon + cell_deg)
+    return {
+        "min_lat": round(min_lat, 4),
+        "max_lat": round(max_lat, 4),
+        "min_lon": round(min_lon, 4),
+        "max_lon": round(max_lon, 4),
+    }
+
+
+@api_view(["GET"])
+def growth_hotspots(request):
+    """
+    Active storm hotspots for the growth engine.
+
+    ?window=30&limit=10&cell_deg=2&min_strikes=300
+
+    This is a deterministic grid aggregation over recent raw strikes. It avoids
+    claiming storm tracks or city impact until those signals are modeled
+    explicitly, but gives enough real data for live/newsjacking video triggers.
+    """
+    window = _clamp_int(request.GET.get("window"), 30, 5, 60)
+    limit = _clamp_int(request.GET.get("limit"), 10, 1, 50)
+    min_strikes = _clamp_int(request.GET.get("min_strikes"), 300, 1, 50_000)
+    try:
+        cell_deg = float(request.GET.get("cell_deg", 2.0))
+    except ValueError:
+        cell_deg = 2.0
+    cell_deg = min(max(cell_deg, 0.5), 10.0)
+
+    cache_key = f"growth_hotspots:v1:{window}:{limit}:{min_strikes}:{cell_deg:g}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return Response(cached)
+
+    now = timezone.now()
+    since_60 = now - timedelta(minutes=60)
+    rows = LightningStrike.objects.filter(received_at__gte=since_60).values(
+        "lat", "lon", "received_at"
+    )
+
+    cells = {}
+    for row in rows:
+        lat = float(row["lat"])
+        lon = _normalize_lon(float(row["lon"]))
+        received_at = row["received_at"]
+        age_min = max(0, (now - received_at).total_seconds() / 60)
+        if age_min > 60:
+            continue
+
+        key = _cell_key(lat, lon, cell_deg)
+        cell = cells.setdefault(key, {
+            "count_5m": 0,
+            "count_15m": 0,
+            "count_30m": 0,
+            "count_60m": 0,
+            "prev_5m": 0,
+            "sum_lat": 0.0,
+            "sum_lon": 0.0,
+            "latest": received_at,
+            "earliest": received_at,
+        })
+
+        cell["count_60m"] += 1
+        if age_min <= 30:
+            cell["count_30m"] += 1
+        if age_min <= 15:
+            cell["count_15m"] += 1
+        if age_min <= 5:
+            cell["count_5m"] += 1
+            cell["sum_lat"] += lat
+            cell["sum_lon"] += lon
+        elif age_min <= 10:
+            cell["prev_5m"] += 1
+
+        if received_at > cell["latest"]:
+            cell["latest"] = received_at
+        if received_at < cell["earliest"]:
+            cell["earliest"] = received_at
+
+    candidates = []
+    for (lat_idx, lon_idx), cell in cells.items():
+        strikes_window = cell["count_30m"] if window == 30 else (
+            cell["count_5m"] if window <= 5 else
+            cell["count_15m"] if window <= 15 else
+            cell["count_60m"]
+        )
+        if strikes_window < min_strikes:
+            continue
+
+        bbox = _cell_bbox(lat_idx, lon_idx, cell_deg)
+        center_lat = (
+            cell["sum_lat"] / cell["count_5m"]
+            if cell["count_5m"]
+            else (bbox["min_lat"] + bbox["max_lat"]) / 2
+        )
+        center_lon = (
+            cell["sum_lon"] / cell["count_5m"]
+            if cell["count_5m"]
+            else (bbox["min_lon"] + bbox["max_lon"]) / 2
+        )
+        previous_rate = cell["prev_5m"] / 5
+        current_rate = cell["count_5m"] / 5
+        trend_ratio = round(current_rate / previous_rate, 2) if previous_rate else None
+        duration_min = max(1, min(60, round((cell["latest"] - cell["earliest"]).total_seconds() / 60)))
+        radius_km = round((cell_deg * 111.32) / 2, 1)
+
+        candidates.append({
+            "id": f"grid:{cell_deg:g}:{lat_idx}:{lon_idx}",
+            "label": f"{center_lat:.1f}, {center_lon:.1f}",
+            "lat": round(center_lat, 5),
+            "lon": round(center_lon, 5),
+            "bbox": bbox,
+            "radius_km": radius_km,
+            "window_minutes": window,
+            "strikes_window": strikes_window,
+            "strikes_5m": cell["count_5m"],
+            "strikes_15m": cell["count_15m"],
+            "strikes_30m": cell["count_30m"],
+            "strikes_60m": cell["count_60m"],
+            "strikes_per_min": round(strikes_window / window, 2),
+            "trend_ratio": trend_ratio,
+            "first_seen_at": cell["earliest"],
+            "last_strike_at": cell["latest"],
+            "duration_min": duration_min,
+            "rank": None,
+            "trigger_strength": (
+                "viral" if strikes_window >= 3000 else
+                "very_strong" if strikes_window >= 1500 else
+                "strong" if strikes_window >= 750 else
+                "candidate"
+            ),
+        })
+
+    candidates.sort(key=lambda item: (item["strikes_window"], item["strikes_5m"]), reverse=True)
+    candidates = candidates[:limit]
+    for idx, item in enumerate(candidates, start=1):
+        item["rank"] = idx
+
+    payload = {
+        "generated_at": now,
+        "window_minutes": window,
+        "limit": limit,
+        "cell_deg": cell_deg,
+        "min_strikes": min_strikes,
+        "count": len(candidates),
+        "hotspots": candidates,
+    }
+    cache.set(cache_key, payload, 30)
+    return Response(payload)
+
+
 @api_view(["GET"])
 def strikes_per_minute(request):
     minutes = int(request.GET.get("minutes", 15))
