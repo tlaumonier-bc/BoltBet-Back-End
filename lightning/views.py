@@ -368,7 +368,7 @@ def strikes_per_minute(request):
 
 @api_view(["GET"])
 def country_strikes(request):
-    limit = min(int(request.GET.get("limit", 5000)), 5000)
+    limit = min(int(request.GET.get("limit", 10000)), 10000)
     country = request.GET.get("country")
 
     if country:

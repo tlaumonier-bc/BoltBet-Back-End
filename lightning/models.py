@@ -62,8 +62,8 @@ class StrikeRollupMinute(models.Model):
 class CountryStrike(models.Model):
     """
     Retained, per-country rolling window of recent strikes (target: newest
-    ~5000 per country). Unlike LightningStrike, this table is NOT purged, so
-    the 'last 5000 per country' endpoint works even for countries that haven't
+    ~10000 per country). Unlike LightningStrike, this table is NOT purged, so
+    the 'last 10000 per country' endpoint works even for countries that haven't
     seen a strike in years. Populated at ingest from lat/lon.
     """
     country = models.CharField(max_length=2, db_index=True)  # ISO alpha-2, 'XX' if unknown
