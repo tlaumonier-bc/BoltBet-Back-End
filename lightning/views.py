@@ -17,7 +17,8 @@ from django.core.cache import cache
 from django.http import HttpResponse, JsonResponse
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
-from .models import StrikeRollupMinute, LightningStrike, CountryStrike
+from .models import StrikeRollupMinute, LightningStrike, CountryStrike, CityStrikeAggregate
+from .city_stats import top_cities_by_country
 
 
 NEWS_CACHE_SECONDS = 60 * 30
@@ -406,6 +407,72 @@ def country_strikes(request):
                  "quality": quality, "received_at": recv}
             )
     return Response(out)
+
+
+@api_view(["GET"])
+def country_map_stats(request):
+    """
+    Map overlay data for SEO country pages.
+
+    ?country=FR&strike_limit=10000&period=all
+    """
+    country = (request.GET.get("country") or "").strip().upper()
+    if not re.fullmatch(r"[A-Z]{2}", country):
+        return Response({"error": "country_required"}, status=400)
+
+    try:
+        strike_limit = min(max(int(request.GET.get("strike_limit", 10000)), 1), 10000)
+    except ValueError:
+        strike_limit = 10000
+
+    period = (request.GET.get("period") or "all").strip().lower()
+    if period not in {"all", "year", "month", "day"}:
+        period = "all"
+
+    cities_qs = CityStrikeAggregate.objects.filter(country=country)
+    if period != "all":
+        cities_qs = cities_qs.filter(period_kind=period)
+    else:
+        cities_qs = cities_qs.filter(period_kind=CityStrikeAggregate.PERIOD_YEAR)
+
+    city_rows = list(
+        cities_qs
+        .values("city_id", "city_name", "country", "lat", "lon", "population")
+        .annotate(strikes=Sum("count"))
+        .order_by("-strikes", "-population")[:10]
+    )
+
+    if not city_rows:
+        city_rows = [
+            {
+                "city_id": city["id"],
+                "city_name": city["name"],
+                "country": city["country"],
+                "lat": city["lat"],
+                "lon": city["lon"],
+                "population": city["population"],
+                "strikes": 0,
+            }
+            for city in top_cities_by_country().get(country, [])[:10]
+        ]
+
+    strikes = list(
+        CountryStrike.objects
+        .filter(country=country)
+        .order_by("-received_at")
+        .values("lat", "lon", "quality", "received_at")[:strike_limit]
+    )
+
+    return Response({
+        "country": country,
+        "period": period,
+        "cityRadiusKm": 20,
+        "cityCount": len(city_rows),
+        "strikeLimit": strike_limit,
+        "strikeCount": len(strikes),
+        "cities": city_rows,
+        "strikes": strikes,
+    })
 
 
 @api_view(["GET"])

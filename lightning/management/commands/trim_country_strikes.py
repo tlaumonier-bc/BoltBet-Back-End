@@ -6,7 +6,7 @@ class Command(BaseCommand):
     help = "Keep only the newest --keep strikes per country."
 
     def add_arguments(self, parser):
-        parser.add_argument("--keep", type=int, default=5000)
+        parser.add_argument("--keep", type=int, default=10000)
 
     def handle(self, *args, **opts):
         keep = opts["keep"]

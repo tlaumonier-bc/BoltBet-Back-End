@@ -6,6 +6,7 @@ from django.http import JsonResponse, HttpResponse
 from lightning.views import (
     country_strikes, nearby_strikes, recent_strikes, strikes_per_minute,
     weather_now, weather_tile, strikes_count, country_news, growth_hotspots,
+    country_map_stats,
 )
 from account.views import (
     username_available, register, profile,
@@ -56,6 +57,7 @@ api_urlpatterns = [
 
     # --- Local SEO freshness ---
     path("news/country/", country_news),
+    path("stats/country-map/", country_map_stats),
 
     # --- Growth engine signals ---
     path("growth/hotspots/", growth_hotspots),

@@ -36,7 +36,7 @@ PURGE_START_DELAY_S = 60     # let boot/migrations settle before the first run
 
 # trim: keep only the newest TRIM_KEEP strikes per country, hourly.
 TRIM_INTERVAL_S = 3600
-TRIM_KEEP = 5000
+TRIM_KEEP = 10000
 TRIM_START_DELAY_S = 90      # stagger off the purge thread
 
 # resolver: settle pending Up/Down bets whose game window has closed.
