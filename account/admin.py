@@ -1,10 +1,10 @@
 from django.contrib import admin
-from .models import Player, Session, StrikeBet
+from .models import GridMatch, Player, Session, StrikeBet
 
 
 @admin.register(Player)
 class PlayerAdmin(admin.ModelAdmin):
-    list_display = ("id", "username", "tokens", "wins", "games_played", "provider", "retired")
+    list_display = ("id", "username", "tokens", "grid_elo", "wins", "games_played", "provider", "retired")
     search_fields = ("username", "username_lower", "provider_subject")
     list_filter = ("provider", "retired")
 
@@ -20,3 +20,13 @@ class StrikeBetAdmin(admin.ModelAdmin):
                     "scope_kind", "scope_id", "status", "outcome", "payout")
     list_filter = ("status", "outcome", "scope_kind")
     search_fields = ("scope_id",)
+
+
+@admin.register(GridMatch)
+class GridMatchAdmin(admin.ModelAdmin):
+    list_display = (
+        "id", "player", "country", "status", "player_score", "bot_score",
+        "elo_before", "elo_after", "created_at",
+    )
+    list_filter = ("status", "country")
+    search_fields = ("player__username", "bot_name", "country")
