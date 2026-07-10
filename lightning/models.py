@@ -118,9 +118,9 @@ class CityStrikeAggregate(models.Model):
             ),
         ]
         indexes = [
-            models.Index(fields=["period_kind", "period_start"]),
-            models.Index(fields=["country", "period_kind", "period_start"]),
-            models.Index(fields=["city_id", "period_kind", "period_start"]),
+            models.Index(fields=["period_kind", "period_start"], name="lightning_c_period__91ca91_idx"),
+            models.Index(fields=["country", "period_kind", "period_start"], name="lightning_c_country_36a6ee_idx"),
+            models.Index(fields=["city_id", "period_kind", "period_start"], name="lightning_c_city_id_bf97f9_idx"),
         ]
 
     def __str__(self):

@@ -135,8 +135,8 @@ class GridMatch(models.Model):
 
     class Meta:
         indexes = [
-            models.Index(fields=["player_id", "status"]),
-            models.Index(fields=["country", "-created_at"]),
+            models.Index(fields=["player_id", "status"], name="account_gri_player_41cdb2_idx"),
+            models.Index(fields=["country", "-created_at"], name="account_gri_country_71f19d_idx"),
         ]
 
     def __str__(self):
