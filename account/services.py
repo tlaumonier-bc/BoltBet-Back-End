@@ -17,7 +17,7 @@ from django.utils import timezone
 
 from lightning.models import LightningStrike, CountryStrike
 from . import analytics
-from .models import GridMatch, Player, StrikeBet
+from .models import GridMatch, GridPlayerStats, Player, StrikeBet
 
 GAME_MS = 30_000
 PAYOUT_MULTIPLIER = 2
@@ -68,6 +68,15 @@ def country_recent_count(country: str, seconds: int = 30, now=None) -> int:
         received_at__gte=now - dt.timedelta(seconds=seconds),
         received_at__lte=now,
     ).count()
+
+
+def grid_stats_for_player(player_or_id, lock=False) -> GridPlayerStats:
+    player_id = getattr(player_or_id, "id", player_or_id)
+    queryset = GridPlayerStats.objects
+    if lock:
+        queryset = queryset.select_for_update()
+    stats, _ = queryset.get_or_create(player_id=player_id)
+    return stats
 
 
 def active_countries(limit: int = 8, now=None):
@@ -127,7 +136,7 @@ def bot_score_for(match: GridMatch, now=None) -> int:
 def settle_grid_match(match_id: int, now=None):
     now = now or timezone.now()
     try:
-        match = GridMatch.objects.select_for_update().select_related("player").get(pk=match_id)
+        match = GridMatch.objects.select_for_update().get(pk=match_id)
     except GridMatch.DoesNotExist:
         return None
     if match.status == "settled":
@@ -136,6 +145,7 @@ def settle_grid_match(match_id: int, now=None):
         return match
 
     player = Player.objects.select_for_update().get(pk=match.player_id)
+    stats = grid_stats_for_player(player.id, lock=True)
     match.bot_score = max(match.bot_score, bot_score_for(match, now))
     if match.player_score > match.bot_score:
         result = 1.0
@@ -144,15 +154,18 @@ def settle_grid_match(match_id: int, now=None):
     else:
         result = 0.0
 
-    delta = _elo_delta(player.grid_elo, match.bot_elo, result)
-    player.grid_elo += delta
+    delta = _elo_delta(stats.grid_elo, match.bot_elo, result)
+    stats.grid_elo += delta
+    stats.games_played += 1
     player.games_played += 1
     if result == 1.0:
+        stats.wins += 1
         player.wins += 1
-    player.save(update_fields=["grid_elo", "games_played", "wins"])
+    stats.save(update_fields=["grid_elo", "games_played", "wins", "updated_at"])
+    player.save(update_fields=["games_played", "wins"])
 
     match.status = "settled"
-    match.elo_after = player.grid_elo
+    match.elo_after = stats.grid_elo
     match.bot_elo_after = match.bot_elo - delta
     match.settled_at = now
     match.save(update_fields=[

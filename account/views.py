@@ -102,10 +102,11 @@ def _can_change_username(player):
 
 def _profile_payload(player):
     available_at = _username_change_available_at(player)
+    grid_stats = services.grid_stats_for_player(player)
     return {
         "username": player.username,
         "tokens": player.tokens,
-        "gridElo": player.grid_elo,
+        "gridElo": grid_stats.grid_elo,
         "verified": _is_verified(player),
         "country": player.country_code,
         "canChangeUsername": _can_change_username(player),
@@ -113,18 +114,19 @@ def _profile_payload(player):
     }
 
 
-def _grid_match_payload(match, now=None):
+def _grid_match_payload(match, now=None, player=None):
     now = now or timezone.now()
     if match.status != "settled" and now >= match.ends_at:
         match = services.settle_grid_match(match.id, now) or match
     bot_score = match.bot_score if match.status == "settled" else max(match.bot_score, services.bot_score_for(match, now))
+    player = player or Player.objects.get(pk=match.player_id)
     return {
         "matchId": str(match.id),
         "status": match.status,
         "country": match.country,
         "grid": {"cols": match.grid_cols, "rows": match.grid_rows},
         "player": {
-            "username": match.player.username,
+            "username": player.username,
             "score": match.player_score,
             "eloBefore": match.elo_before,
             "eloAfter": match.elo_after,
@@ -494,33 +496,34 @@ def grid_start_match(request):
 
     with transaction.atomic():
         locked = Player.objects.select_for_update().get(pk=player.pk)
+        grid_stats = services.grid_stats_for_player(locked, lock=True)
         existing = (
             GridMatch.objects
             .select_for_update()
-            .filter(player=locked, status__in=("preparing", "active"), ends_at__gt=now)
+            .filter(player_id=locked.id, status__in=("preparing", "active"), ends_at__gt=now)
             .order_by("-created_at")
             .first()
         )
         if existing:
-            return Response(_grid_match_payload(existing, now))
+            return Response(_grid_match_payload(existing, now, locked))
 
         started_at = now + timedelta(seconds=services.GRID_PREPARE_SECONDS)
         match = GridMatch.objects.create(
-            player=locked,
+            player_id=locked.id,
             country=country,
             status="preparing",
             bot_name=f"StormBot-{randint(100, 999)}",
-            bot_elo=max(800, locked.grid_elo + randint(-80, 80)),
+            bot_elo=max(800, grid_stats.grid_elo + randint(-80, 80)),
             grid_cols=8,
             grid_rows=10,
             strikes_30s_at_start=strikes_30s,
-            elo_before=locked.grid_elo,
+            elo_before=grid_stats.grid_elo,
             prepare_ends_at=started_at,
             started_at=started_at,
             ends_at=started_at + timedelta(seconds=services.GRID_GAME_SECONDS),
         )
 
-    return Response(_grid_match_payload(match, now))
+    return Response(_grid_match_payload(match, now, player))
 
 
 @api_view(["GET"])
@@ -529,10 +532,10 @@ def grid_match_state(request, match_id):
     if player is None:
         return Response(status=401)
     try:
-        match = GridMatch.objects.select_related("player").get(pk=match_id, player=player)
+        match = GridMatch.objects.get(pk=match_id, player_id=player.id)
     except GridMatch.DoesNotExist:
         return Response(status=404)
-    return Response(_grid_match_payload(match))
+    return Response(_grid_match_payload(match, player=player))
 
 
 @api_view(["POST"])
@@ -549,14 +552,14 @@ def grid_match_click(request, match_id):
     now = timezone.now()
     with transaction.atomic():
         try:
-            match = GridMatch.objects.select_for_update().select_related("player").get(pk=match_id, player=player)
+            match = GridMatch.objects.select_for_update().get(pk=match_id, player_id=player.id)
         except GridMatch.DoesNotExist:
             return Response(status=404)
         if now < match.started_at:
             return Response({"error": "preparing"}, status=409)
         if now >= match.ends_at:
             settled = services.settle_grid_match(match.id, now) or match
-            return Response(_grid_match_payload(settled, now))
+            return Response(_grid_match_payload(settled, now, player))
         max_cell = match.grid_cols * match.grid_rows
         if cell < 0 or cell >= max_cell:
             return Response({"error": "bad_cell"}, status=400)
@@ -564,4 +567,4 @@ def grid_match_click(request, match_id):
         match.player_score += 1
         match.save(update_fields=["status", "player_score"])
 
-    return Response(_grid_match_payload(match, now))
+    return Response(_grid_match_payload(match, now, player))

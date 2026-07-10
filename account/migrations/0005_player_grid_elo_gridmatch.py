@@ -1,5 +1,4 @@
 from django.db import migrations, models
-import django.db.models.deletion
 
 
 class Migration(migrations.Migration):
@@ -9,10 +8,17 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.AddField(
-            model_name="player",
-            name="grid_elo",
-            field=models.IntegerField(default=1200),
+        migrations.CreateModel(
+            name="GridPlayerStats",
+            fields=[
+                ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
+                ("player_id", models.BigIntegerField(db_index=True, unique=True)),
+                ("grid_elo", models.IntegerField(default=1200)),
+                ("games_played", models.IntegerField(default=0)),
+                ("wins", models.IntegerField(default=0)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+            ],
         ),
         migrations.CreateModel(
             name="GridMatch",
@@ -35,11 +41,11 @@ class Migration(migrations.Migration):
                 ("started_at", models.DateTimeField()),
                 ("ends_at", models.DateTimeField()),
                 ("settled_at", models.DateTimeField(blank=True, null=True)),
-                ("player", models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name="grid_matches", to="account.player")),
+                ("player_id", models.BigIntegerField(db_index=True)),
             ],
             options={
                 "indexes": [
-                    models.Index(fields=["player", "status"], name="account_gri_player__1dadb1_idx"),
+                    models.Index(fields=["player_id", "status"], name="account_gri_player_41cdb2_idx"),
                     models.Index(fields=["country", "-created_at"], name="account_gri_country_71f19d_idx"),
                 ],
             },

@@ -15,7 +15,6 @@ class Player(models.Model):
     provider = models.CharField(max_length=20, blank=True, default="")
     provider_subject = models.CharField(max_length=255, blank=True, default="")
     country_code = models.CharField(max_length=2, blank=True, default="")
-    grid_elo = models.IntegerField(default=1200)
     wins = models.IntegerField(default=0)
     games_played = models.IntegerField(default=0)
     retired = models.BooleanField(default=False)  # merged guest accounts
@@ -87,6 +86,20 @@ class StrikeBet(models.Model):
         return f"{self.player_id} {self.side} {self.amount} r{self.round_id} ({self.status})"
 
 
+class GridPlayerStats(models.Model):
+    """Grid-game ranking state, kept outside account_player to avoid ALTERs."""
+
+    player_id = models.BigIntegerField(unique=True, db_index=True)
+    grid_elo = models.IntegerField(default=1200)
+    games_played = models.IntegerField(default=0)
+    wins = models.IntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"player {self.player_id}: {self.grid_elo}"
+
+
 class GridMatch(models.Model):
     """
     One 30s grid game against a bot.
@@ -101,7 +114,7 @@ class GridMatch(models.Model):
         ("settled", "settled"),
     ]
 
-    player = models.ForeignKey(Player, on_delete=models.CASCADE, related_name="grid_matches")
+    player_id = models.BigIntegerField(db_index=True)
     country = models.CharField(max_length=2, db_index=True)
     status = models.CharField(max_length=10, choices=STATUS, default="preparing", db_index=True)
     bot_name = models.CharField(max_length=40, default="StormBot")
@@ -122,7 +135,7 @@ class GridMatch(models.Model):
 
     class Meta:
         indexes = [
-            models.Index(fields=["player", "status"]),
+            models.Index(fields=["player_id", "status"]),
             models.Index(fields=["country", "-created_at"]),
         ]
 
