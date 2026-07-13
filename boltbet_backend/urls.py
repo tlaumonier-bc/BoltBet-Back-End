@@ -14,6 +14,7 @@ from account.views import (
     leaderboard, leaderboard_summary, leaderboard_context,
     grid_active_countries, grid_start_match, grid_match_state, grid_match_click,
 )
+from account.admin_views import admin_accounts_growth
 from account.firebase_auth import firebase_exchange
 from account.oauth import oauth_start, oauth_callback
 
@@ -81,6 +82,9 @@ api_urlpatterns = [
     path("game/grid/match/", grid_start_match),
     path("game/grid/match/<int:match_id>/", grid_match_state),
     path("game/grid/match/<int:match_id>/click/", grid_match_click),
+
+    # --- Private product admin ---
+    path("admin/accounts-growth/", admin_accounts_growth),
 
     # --- OAuth (Google to start; extensible) ---
     path("auth/firebase/", firebase_exchange),
