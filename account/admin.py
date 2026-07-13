@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Player, Session, StrikeBet
+from .models import GridMatch, GridPlayerStats, Player, Session, StrikeBet
 
 
 @admin.register(Player)
@@ -20,3 +20,19 @@ class StrikeBetAdmin(admin.ModelAdmin):
                     "scope_kind", "scope_id", "status", "outcome", "payout")
     list_filter = ("status", "outcome", "scope_kind")
     search_fields = ("scope_id",)
+
+
+@admin.register(GridPlayerStats)
+class GridPlayerStatsAdmin(admin.ModelAdmin):
+    list_display = ("id", "player_id", "grid_elo", "wins", "games_played", "updated_at")
+    search_fields = ("player_id",)
+
+
+@admin.register(GridMatch)
+class GridMatchAdmin(admin.ModelAdmin):
+    list_display = (
+        "id", "player_id", "country", "status", "player_score", "bot_score",
+        "elo_before", "elo_after", "created_at",
+    )
+    list_filter = ("status", "country")
+    search_fields = ("player_id", "bot_name", "country")

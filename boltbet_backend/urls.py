@@ -6,12 +6,15 @@ from django.http import JsonResponse, HttpResponse
 from lightning.views import (
     country_strikes, nearby_strikes, recent_strikes, strikes_per_minute,
     weather_now, weather_tile, strikes_count, country_news, growth_hotspots,
+    country_map_stats,
 )
 from account.views import (
     username_available, register, profile,
     change_username, change_country, place_bet, bet_result, claim_tokens,
     leaderboard, leaderboard_summary, leaderboard_context,
+    grid_active_countries, grid_start_match, grid_match_state, grid_match_click,
 )
+from account.admin_views import admin_accounts_growth
 from account.firebase_auth import firebase_exchange
 from account.oauth import oauth_start, oauth_callback
 
@@ -56,6 +59,7 @@ api_urlpatterns = [
 
     # --- Local SEO freshness ---
     path("news/country/", country_news),
+    path("stats/country-map/", country_map_stats),
 
     # --- Growth engine signals ---
     path("growth/hotspots/", growth_hotspots),
@@ -74,6 +78,13 @@ api_urlpatterns = [
     path("game/leaderboard/", leaderboard),
     path("game/leaderboard/summary/", leaderboard_summary),
     path("game/leaderboard/context/", leaderboard_context),
+    path("game/grid/active-countries/", grid_active_countries),
+    path("game/grid/match/", grid_start_match),
+    path("game/grid/match/<int:match_id>/", grid_match_state),
+    path("game/grid/match/<int:match_id>/click/", grid_match_click),
+
+    # --- Private product admin ---
+    path("admin/accounts-growth/", admin_accounts_growth),
 
     # --- OAuth (Google to start; extensible) ---
     path("auth/firebase/", firebase_exchange),

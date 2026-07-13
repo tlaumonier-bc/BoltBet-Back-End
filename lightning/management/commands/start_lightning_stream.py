@@ -208,6 +208,7 @@ class Command(BaseCommand):
         objs = []
         country_objs = []
         rollups = {}  # (bucket, cell_id) -> [count, good, medium, bad, lat_sum, lat_n]
+        city_source_rows = []
 
         for s in batch:
             ts = dt.datetime.fromtimestamp(s["event_ms"] / 1000, tz=dt.timezone.utc)
@@ -223,6 +224,14 @@ class Command(BaseCommand):
                 country=cc, lat=s["lat"], lon=s["lon"],
                 timestamp=ts, received_at=recv, quality=s["quality"],
             ))
+
+            city_source_rows.append({
+                "lat": s["lat"],
+                "lon": s["lon"],
+                "country": cc,
+                "timestamp": ts,
+                "quality": s["quality"],
+            })
 
             cell_id, _, _ = rollup_cell_for(s["lat"], s["lon"])
             bucket = ts.replace(second=0, microsecond=0)
@@ -252,6 +261,14 @@ class Command(BaseCommand):
                         cur.execute(ROLLUP_UPSERT, [bucket, cell_id, cnt, g, m, b, lsum, ln])
             except Exception as e:
                 self.stdout.write(self.style.ERROR(f"rollup write failed: {e}"))
+
+        try:
+            from lightning.city_stats import city_aggregate_rows, upsert_city_aggregate_rows
+
+            city_aggregates = city_aggregate_rows(city_source_rows)
+            upsert_city_aggregate_rows(connection, city_aggregates)
+        except Exception as e:
+            self.stdout.write(self.style.ERROR(f"city aggregate write failed: {e}"))
 
         self.stdout.write(
             f"flushed {len(objs)} strikes, {len(country_objs)} country rows, "

@@ -84,3 +84,60 @@ class StrikeBet(models.Model):
 
     def __str__(self):
         return f"{self.player_id} {self.side} {self.amount} r{self.round_id} ({self.status})"
+
+
+class GridPlayerStats(models.Model):
+    """Grid-game ranking state, kept outside account_player to avoid ALTERs."""
+
+    player_id = models.BigIntegerField(unique=True, db_index=True)
+    grid_elo = models.IntegerField(default=1200)
+    games_played = models.IntegerField(default=0)
+    wins = models.IntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"player {self.player_id}: {self.grid_elo}"
+
+
+class GridMatch(models.Model):
+    """
+    One 30s grid game against a bot.
+
+    The bot is intentionally server-side from day one so the client shape will
+    still work when matchmaking swaps it for a real opponent later.
+    """
+
+    STATUS = [
+        ("preparing", "preparing"),
+        ("active", "active"),
+        ("settled", "settled"),
+    ]
+
+    player_id = models.BigIntegerField(db_index=True)
+    country = models.CharField(max_length=2, db_index=True)
+    status = models.CharField(max_length=10, choices=STATUS, default="preparing", db_index=True)
+    bot_name = models.CharField(max_length=40, default="StormBot")
+    bot_elo = models.IntegerField(default=1200)
+    bot_elo_after = models.IntegerField(null=True, blank=True)
+    player_score = models.IntegerField(default=0)
+    bot_score = models.IntegerField(default=0)
+    grid_cols = models.IntegerField(default=8)
+    grid_rows = models.IntegerField(default=10)
+    strikes_30s_at_start = models.IntegerField(default=0)
+    elo_before = models.IntegerField(default=1200)
+    elo_after = models.IntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    prepare_ends_at = models.DateTimeField()
+    started_at = models.DateTimeField()
+    ends_at = models.DateTimeField()
+    settled_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["player_id", "status"], name="account_gri_player_41cdb2_idx"),
+            models.Index(fields=["country", "-created_at"], name="account_gri_country_71f19d_idx"),
+        ]
+
+    def __str__(self):
+        return f"{self.player_id} vs {self.bot_name} in {self.country} ({self.status})"
