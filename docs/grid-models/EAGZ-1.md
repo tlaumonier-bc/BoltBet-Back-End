@@ -293,4 +293,18 @@ Model **EAGZ-1** separates "how we learn where storms are" (`W_obs`, ~10 min) fr
 - Pure algorithm: `lightning/eagz.py` (`run_eagz1`, `best_zone`, `Eagz1Config`, `Strike`). No Django/DB imports.
 - Stage 1 uses an **equivalent fixed grid** (`coarse_deg`, default 0.3° ≈ 33 km) rather than a geohash library — §3.1 explicitly permits this and it makes adjacency-merge trivial.
 - Grid geometry is defined **equirectangularly** (linear lat/lon within the zone bbox), which is the canonical mapping the server scores on and the client must render/hit-test against, so displayed score == authoritative score.
-- Baseline params here set `W_round = 60`, `λ_target = 0.7`, `min_total_strikes = 8`, `τ = 180 s`. Tune per §7/§9.
+- Baseline params here set `W_round = 60`, `min_total_strikes = 8`, `min_round_strikes = 10`, `τ = 180 s`. Tune per §7/§9.
+
+### EAGZ-1.1 — extent-based sizing (current default)
+
+The shipped model tags zones as **EAGZ-1.1**. It replaces §4's density-based cell
+sizing (which, with real data, hit the `cell_size_max` clamp and produced grids
+far larger than the storm — strikes concentrated in a few cells) with
+**extent-based sizing**: the grid is framed to the recent strike cluster's
+temporally-weighted spatial spread. Each axis is sized to ±`sigma_k`·σ (default
+`sigma_k = 2.0`), and the per-axis cell size is clamped to
+`[cell_size_min, cell_size_max]`. This makes strikes populate many cells
+regardless of absolute density. `λ_target` is retained in config but unused.
+(By the §0 convention this is arguably a structural change → EAGZ-2; kept in the
+1.x line as an iteration. Rename via `Eagz1Config.model` / `MODEL_NAME` if you
+prefer EAGZ-2.)

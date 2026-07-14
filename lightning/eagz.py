@@ -28,7 +28,7 @@ import math
 from dataclasses import asdict, dataclass
 from typing import NamedTuple
 
-MODEL_NAME = "EAGZ-1"
+MODEL_NAME = "EAGZ-1.1"
 KM_PER_DEG = 111.32
 
 
@@ -47,7 +47,8 @@ class Eagz1Config:
     w_obs_seconds: float = 600.0          # 10 min
     coarse_deg: float = 0.3               # ~33 km fixed grid (~geohash p4-5)
     min_region_activity: int = 5          # coarse-cell strike floor (Stage 1)
-    lambda_target: float = 0.7            # expected strikes/cell during the round
+    sigma_k: float = 2.0                  # grid half-extent = k * weighted std-dev of strikes
+    lambda_target: float = 0.7            # (legacy density target; unused since sizing is extent-based)
     cell_size_min_km: float = 0.2         # 200 m
     cell_size_max_km: float = 10.0
     min_total_strikes: float = 8.0        # weighted activity floor over W_obs (Stage 3)
@@ -100,8 +101,7 @@ def _regions(strikes: list[Strike], cfg: Eagz1Config):
                     if nk in active and nk not in seen:
                         seen.add(nk)
                         stack.append(nk)
-        region_strikes = [s for ck in comp for s in active[ck]]
-        yield len(comp), region_strikes
+        yield [s for ck in comp for s in active[ck]]
 
 
 def _weighted_centroid(strikes: list[Strike], now: float, tau: float):
@@ -116,6 +116,21 @@ def _weighted_centroid(strikes: list[Strike], now: float, tau: float):
     return sy / sw, sx / sw  # (lat, lon)
 
 
+def _weighted_spread_km(strikes, center_lat, center_lon, now, tau):
+    """Temporally-weighted std-dev of strike positions around the centroid, in km."""
+    sw = svlat = svlon = 0.0
+    for s in strikes:
+        w = _weight(s.ts, now, tau)
+        sw += w
+        svlat += w * (s.lat - center_lat) ** 2
+        svlon += w * (s.lon - center_lon) ** 2
+    if sw <= 0:
+        return 0.0, 0.0
+    sig_lat_km = math.sqrt(svlat / sw) * KM_PER_DEG
+    sig_lon_km = math.sqrt(svlon / sw) * KM_PER_DEG * _cos_lat(center_lat)
+    return sig_lat_km, sig_lon_km
+
+
 def _normalized_entropy(counts: list[float], total: float, n_cells: int) -> float:
     if total <= 0:
         return 0.0
@@ -127,7 +142,7 @@ def _normalized_entropy(counts: list[float], total: float, n_cells: int) -> floa
     return h / math.log(n_cells)
 
 
-def _size_and_validate(bucket_count: int, region_strikes: list[Strike], cfg: Eagz1Config, now: float):
+def _size_and_validate(region_strikes: list[Strike], cfg: Eagz1Config, now: float):
     """Stages 2 + 3 for one region. Returns a zone dict or None."""
     if not region_strikes:
         return None
@@ -137,23 +152,17 @@ def _size_and_validate(bucket_count: int, region_strikes: list[Strike], cfg: Eag
         return None
     center_lat, center_lon = centroid
 
-    # Stage 2 — round-scoped cell sizing.
-    # Region area from its coarse-bucket footprint at the region's latitude.
-    coarse_km_lat = cfg.coarse_deg * KM_PER_DEG
-    coarse_km_lon = cfg.coarse_deg * KM_PER_DEG * _cos_lat(center_lat)
-    area_km2 = bucket_count * coarse_km_lat * coarse_km_lon
-    if area_km2 <= 0:
-        return None
-
-    rate = len(region_strikes) / (area_km2 * cfg.w_obs_seconds)  # per km² per sec
-    if rate <= 0:
-        return None
-    cell_km = math.sqrt(cfg.lambda_target / (rate * cfg.w_round_seconds))
-    cell_km = max(cfg.cell_size_min_km, min(cfg.cell_size_max_km, cell_km))
+    # Stage 2 — frame the grid to the recent strike cluster's spatial spread so
+    # strikes populate MANY cells instead of concentrating in a few. Each axis is
+    # sized to +/- k*sigma; the per-axis cell size is clamped to [min, max].
+    sig_lat_km, sig_lon_km = _weighted_spread_km(region_strikes, center_lat, center_lon, now, cfg.tau_seconds)
+    cell_h_km = min(cfg.cell_size_max_km, max(cfg.cell_size_min_km, 2.0 * cfg.sigma_k * sig_lat_km / cfg.grid_rows))
+    cell_w_km = min(cfg.cell_size_max_km, max(cfg.cell_size_min_km, 2.0 * cfg.sigma_k * sig_lon_km / cfg.grid_cols))
+    cell_km = (cell_h_km + cell_w_km) / 2.0
 
     # Grid bbox (equirectangular), centered on the weighted centroid.
-    half_h_deg = (cfg.grid_rows * cell_km / 2.0) / KM_PER_DEG
-    half_w_deg = (cfg.grid_cols * cell_km / 2.0) / (KM_PER_DEG * _cos_lat(center_lat))
+    half_h_deg = (cfg.grid_rows * cell_h_km / 2.0) / KM_PER_DEG
+    half_w_deg = (cfg.grid_cols * cell_w_km / 2.0) / (KM_PER_DEG * _cos_lat(center_lat))
     min_lat, max_lat = center_lat - half_h_deg, center_lat + half_h_deg
     min_lon, max_lon = center_lon - half_w_deg, center_lon + half_w_deg
     span_lat = max_lat - min_lat
@@ -211,8 +220,8 @@ def _size_and_validate(bucket_count: int, region_strikes: list[Strike], cfg: Eag
 def run_eagz1(strikes: list[Strike], cfg: Eagz1Config, now: float) -> list[dict]:
     """Run the full EAGZ-1 pipeline and return all accepted playable zones."""
     zones = []
-    for bucket_count, region_strikes in _regions(strikes, cfg):
-        zone = _size_and_validate(bucket_count, region_strikes, cfg, now)
+    for region_strikes in _regions(strikes, cfg):
+        zone = _size_and_validate(region_strikes, cfg, now)
         if zone is not None:
             zones.append(zone)
     return zones

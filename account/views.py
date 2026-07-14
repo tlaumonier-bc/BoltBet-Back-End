@@ -496,6 +496,7 @@ def grid_active_countries(request):
         "countries": services.active_countries(limit=limit),
         "windowSeconds": 30,
         "fallbackWindowSeconds": 300,
+        "model": services.EAGZ_CONFIG.model,
     })
 
 
