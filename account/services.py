@@ -157,18 +157,25 @@ def generate_bot_selections(match: GridMatch):
     GridCellSelection.objects.bulk_create(sels)
 
 
-def _score_selections(selections, zone, strikes) -> int:
-    """Count strikes landing in each selection's cell within its effective window.
-    Windows are capped at the next selection's start so they never double-count."""
+def _score_selections(selections, zone, strikes, round_end) -> int:
+    """'Camp' scoring: a selection stays active from when it was made until the
+    NEXT selection (or round_end for the last one), and every strike landing in
+    its cell during that span counts. Each strike is assigned to at most one
+    selection (the one active when it landed), so there is no double-counting."""
     sels = sorted(selections, key=lambda s: s.started_at)
+    if not sels:
+        return 0
     score = 0
-    for i, s in enumerate(sels):
-        end = s.expires_at
-        if i + 1 < len(sels):
-            end = min(end, sels[i + 1].started_at)
-        for lat, lon, received_at in strikes:
-            if s.started_at <= received_at <= end and cell_for_point(lat, lon, zone) == s.cell:
-                score += 1
+    for lat, lon, received_at in strikes:
+        cell = cell_for_point(lat, lon, zone)
+        if cell is None:
+            continue
+        for i, s in enumerate(sels):
+            end = sels[i + 1].started_at if i + 1 < len(sels) else round_end
+            if s.started_at <= received_at < end:
+                if s.cell == cell:
+                    score += 1
+                break
     return score
 
 
@@ -196,9 +203,9 @@ def live_scores(match: GridMatch, now):
     until = min(now, match.ends_at)
     strikes = _round_strikes_in_zone(match, until)
     sels = list(match.selections.all())
-    player = _score_selections([s for s in sels if s.actor == "player"], zone, strikes)
+    player = _score_selections([s for s in sels if s.actor == "player"], zone, strikes, until)
     bot = _score_selections(
-        [s for s in sels if s.actor == "bot" and s.started_at <= until], zone, strikes
+        [s for s in sels if s.actor == "bot" and s.started_at <= until], zone, strikes, until
     )
     return player, bot
 
