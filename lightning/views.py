@@ -170,6 +170,44 @@ def nearby_strikes(request):
     })
 
 
+@api_view(["GET"])
+def strikes_in_bounds(request):
+    """Recent strikes inside a lat/lon box, over the last `seconds`. Used by the
+    grid game to feed a small zoomed zone directly (instead of the country-wide
+    feed), matching the LightningStrike source the server scores on.
+
+    ?minLat=&maxLat=&minLon=&maxLon=&seconds=90&limit=800
+    """
+    try:
+        min_lat = float(request.GET["minLat"])
+        max_lat = float(request.GET["maxLat"])
+        min_lon = _normalize_lon(float(request.GET["minLon"]))
+        max_lon = _normalize_lon(float(request.GET["maxLon"]))
+    except (KeyError, ValueError):
+        return Response({"error": "bounds_required"}, status=400)
+
+    seconds = min(max(int(request.GET.get("seconds", 90)), 1), 3600)
+    limit = min(max(int(request.GET.get("limit", 800)), 1), 3000)
+    since = timezone.now() - timedelta(seconds=seconds)
+
+    qs = LightningStrike.objects.filter(
+        received_at__gte=since,
+        lat__gte=min(min_lat, max_lat),
+        lat__lte=max(min_lat, max_lat),
+    )
+    # Handle a box that wraps the antimeridian (min_lon > max_lon after normalise).
+    if min_lon <= max_lon:
+        qs = qs.filter(lon__gte=min_lon, lon__lte=max_lon)
+    else:
+        qs = qs.filter(Q(lon__gte=min_lon) | Q(lon__lte=max_lon))
+
+    rows = qs.order_by("-received_at").values(
+        "lat", "lon", "timestamp", "quality", "received_at"
+    )[:limit]
+    strikes = list(rows)
+    return Response({"count": len(strikes), "strikes": strikes})
+
+
 def _clamp_int(value, default, min_value, max_value):
     try:
         n = int(value)
