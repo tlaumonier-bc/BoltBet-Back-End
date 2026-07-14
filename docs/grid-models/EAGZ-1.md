@@ -153,9 +153,18 @@ nᵢ = Σ weight(strike_k) for strikes k in cell i
 
 ```
 Zone is PLAYABLE if:
-  1. total ≥ min_total_strikes     (activity floor over W_obs)
-  2. H_norm ≥ entropy_threshold     (dispersion floor)
+  1. round_strikes ≥ min_round_strikes  (>=10 strikes falling IN THE GRID over the
+                                          last W_round=60s — counted geographically,
+                                          so a grid straddling a border counts
+                                          strikes from BOTH countries, not a
+                                          per-country count)
+  2. total ≥ min_total_strikes          (weighted activity floor over W_obs)
+  3. H_norm ≥ entropy_threshold          (dispersion floor)
 ```
+
+Rationale for (1): eligibility must be a property of the *grid*, not of a
+country, because a grid can sit across a national border. Counting per country
+(as the legacy CAFG-0 model did) undercounts such grids.
 
 ---
 
@@ -189,7 +198,8 @@ W_obs   = 8–12 min (480–720s)       (≈ 8-12× W_round; tune based on how m
 | `recompute_interval` | Pipeline recompute cadence | 60 sec (once per round) |
 | `λ_target` | Target expected strikes/cell **during the 60s round** | 0.4–1.0 |
 | `cell_size_min` / `cell_size_max` | Clamp bounds for adaptive cell size | 200m / 10km |
-| `min_total_strikes` | Activity floor (over `W_obs`) | tune empirically, start low |
+| `min_total_strikes` | Weighted activity floor (over `W_obs`) | tune empirically, start low |
+| `min_round_strikes` | Raw strikes in the grid over the last `W_round` (per-grid gate) | 10 |
 | `entropy_threshold` | Minimum `H_norm` to accept a zone | 0.5 (start conservative) |
 | `τ` | Recency decay constant for entropy weighting | 2–4 min |
 

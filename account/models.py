@@ -122,8 +122,18 @@ class GridMatch(models.Model):
     bot_elo_after = models.IntegerField(null=True, blank=True)
     player_score = models.IntegerField(default=0)
     bot_score = models.IntegerField(default=0)
-    grid_cols = models.IntegerField(default=8)
-    grid_rows = models.IntegerField(default=10)
+    grid_cols = models.IntegerField(default=10)
+    grid_rows = models.IntegerField(default=8)
+    # EAGZ-1 zone geometry (equirectangular bbox of the grid) + model tags.
+    area_min_lat = models.FloatField(null=True, blank=True)
+    area_max_lat = models.FloatField(null=True, blank=True)
+    area_min_lon = models.FloatField(null=True, blank=True)
+    area_max_lon = models.FloatField(null=True, blank=True)
+    cell_size_km = models.FloatField(null=True, blank=True)
+    zone_h_norm = models.FloatField(null=True, blank=True)
+    zone_round_strikes = models.IntegerField(null=True, blank=True)
+    model_name = models.CharField(max_length=20, default="EAGZ-1")
+    model_params = models.JSONField(null=True, blank=True)
     strikes_30s_at_start = models.IntegerField(default=0)
     elo_before = models.IntegerField(default=1200)
     elo_after = models.IntegerField(null=True, blank=True)
@@ -141,3 +151,24 @@ class GridMatch(models.Model):
 
     def __str__(self):
         return f"{self.player_id} vs {self.bot_name} in {self.country} ({self.status})"
+
+
+class GridCellSelection(models.Model):
+    """One cell a player or the bot committed to for a 3s lock window. Scoring is
+    authoritative: at (and during) settlement the server counts strikes that fall
+    in the selected cell within its effective window. The bot's whole schedule is
+    generated up front at match creation; the player's are appended as they tap."""
+
+    ACTORS = [("player", "player"), ("bot", "bot")]
+
+    match = models.ForeignKey(GridMatch, on_delete=models.CASCADE, related_name="selections")
+    actor = models.CharField(max_length=6, choices=ACTORS)
+    cell = models.IntegerField()
+    started_at = models.DateTimeField()
+    expires_at = models.DateTimeField()
+
+    class Meta:
+        indexes = [models.Index(fields=["match", "actor", "started_at"])]
+
+    def __str__(self):
+        return f"{self.actor} cell {self.cell} @ {self.started_at:%H:%M:%S}"

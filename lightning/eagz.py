@@ -50,7 +50,8 @@ class Eagz1Config:
     lambda_target: float = 0.7            # expected strikes/cell during the round
     cell_size_min_km: float = 0.2         # 200 m
     cell_size_max_km: float = 10.0
-    min_total_strikes: float = 8.0        # weighted activity floor (Stage 3)
+    min_total_strikes: float = 8.0        # weighted activity floor over W_obs (Stage 3)
+    min_round_strikes: int = 10           # raw strikes IN THE GRID over the last W_round
     entropy_threshold: float = 0.5        # H_norm floor (Stage 3)
     tau_seconds: float = 180.0            # recency decay (3 min)
     grid_cols: int = 10
@@ -160,9 +161,15 @@ def _size_and_validate(bucket_count: int, region_strikes: list[Strike], cfg: Eag
     if span_lat <= 0 or span_lon <= 0:
         return None
 
-    # Stage 3 — temporally-weighted entropy over W_obs on this grid.
+    # Stage 3 — temporally-weighted entropy over W_obs on this grid, plus a raw
+    # per-grid activity gate over the last W_round. The round count is geographic
+    # (strike falls inside the grid bbox), so a grid straddling a border counts
+    # strikes from both countries — the whole reason we gate per grid, not per
+    # country.
     cols, rows = cfg.grid_cols, cfg.grid_rows
     counts = [0.0] * (cols * rows)
+    round_cutoff = now - cfg.w_round_seconds
+    round_strikes = 0
     for s in region_strikes:
         rx = (s.lon - min_lon) / span_lon
         ry = (max_lat - s.lat) / span_lat  # row 0 = north (top), matches client
@@ -171,7 +178,11 @@ def _size_and_validate(bucket_count: int, region_strikes: list[Strike], cfg: Eag
         col = min(cols - 1, int(rx * cols))
         row = min(rows - 1, int(ry * rows))
         counts[row * cols + col] += _weight(s.ts, now, cfg.tau_seconds)
+        if s.ts >= round_cutoff:
+            round_strikes += 1
 
+    if round_strikes < cfg.min_round_strikes:
+        return None
     total = sum(counts)
     if total < cfg.min_total_strikes:
         return None
@@ -191,6 +202,7 @@ def _size_and_validate(bucket_count: int, region_strikes: list[Strike], cfg: Eag
         "rows": rows,
         "h_norm": h_norm,
         "total_strikes_obs": total,
+        "round_strikes": round_strikes,
         "model": cfg.model,
         "params": cfg.snapshot(),
     }

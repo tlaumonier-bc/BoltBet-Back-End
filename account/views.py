@@ -9,7 +9,7 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from . import analytics
-from .models import GridMatch, Player, Session, StrikeBet
+from .models import GridCellSelection, GridMatch, Player, Session, StrikeBet
 from . import services
 
 
@@ -118,16 +118,33 @@ def _grid_match_payload(match, now=None, player=None):
     now = now or timezone.now()
     if match.status != "settled" and now >= match.ends_at:
         match = services.settle_grid_match(match.id, now) or match
-    bot_score = match.bot_score if match.status == "settled" else max(match.bot_score, services.bot_score_for(match, now))
+    if match.status == "settled":
+        player_score, bot_score = match.player_score, match.bot_score
+    else:
+        player_score, bot_score = services.live_scores(match, now)
     player = player or Player.objects.get(pk=match.player_id)
     return {
         "matchId": str(match.id),
         "status": match.status,
         "country": match.country,
-        "grid": {"cols": match.grid_cols, "rows": match.grid_rows},
+        "grid": {
+            "cols": match.grid_cols,
+            "rows": match.grid_rows,
+            "bounds": (
+                {
+                    "minLat": match.area_min_lat,
+                    "maxLat": match.area_max_lat,
+                    "minLon": match.area_min_lon,
+                    "maxLon": match.area_max_lon,
+                }
+                if match.area_min_lat is not None
+                else None
+            ),
+            "cellSizeKm": match.cell_size_km,
+        },
         "player": {
             "username": player.username,
-            "score": match.player_score,
+            "score": player_score,
             "eloBefore": match.elo_before,
             "eloAfter": match.elo_after,
         },
@@ -137,6 +154,7 @@ def _grid_match_payload(match, now=None, player=None):
             "elo": match.bot_elo,
             "eloAfter": match.bot_elo_after,
             "bot": True,
+            "selectedCell": services.bot_cell_at(match, now) if match.status != "settled" else None,
         },
         "timing": {
             "createdAt": match.created_at.isoformat(),
@@ -146,6 +164,8 @@ def _grid_match_payload(match, now=None, player=None):
             "serverNow": now.isoformat(),
         },
         "strikes30sAtStart": match.strikes_30s_at_start,
+        "model": match.model_name,
+        "zone": {"hNorm": match.zone_h_norm, "roundStrikes": match.zone_round_strikes},
         "eloDelta": (
             match.elo_after - match.elo_before
             if match.elo_after is not None
@@ -490,8 +510,10 @@ def grid_start_match(request):
         return Response({"error": "bad_country"}, status=400)
 
     now = timezone.now()
-    strikes_30s = services.country_recent_count(country, seconds=30, now=now)
-    if strikes_30s <= 0:
+    # EAGZ-1: pick a playable sub-country zone whose grid has >= min_round_strikes
+    # (10) strikes in the last minute, counted geographically (border-agnostic).
+    zone = services.eagz_zone_for_country(country, now)
+    if zone is None:
         return Response({"error": "not_playable"}, status=400)
 
     with transaction.atomic():
@@ -514,14 +536,24 @@ def grid_start_match(request):
             status="preparing",
             bot_name=f"StormBot-{randint(100, 999)}",
             bot_elo=max(800, grid_stats.grid_elo + randint(-80, 80)),
-            grid_cols=8,
-            grid_rows=10,
-            strikes_30s_at_start=strikes_30s,
+            grid_cols=zone["cols"],
+            grid_rows=zone["rows"],
+            strikes_30s_at_start=zone["round_strikes"],
+            area_min_lat=zone["min_lat"],
+            area_max_lat=zone["max_lat"],
+            area_min_lon=zone["min_lon"],
+            area_max_lon=zone["max_lon"],
+            cell_size_km=zone["cell_size_km"],
+            zone_h_norm=zone["h_norm"],
+            zone_round_strikes=zone["round_strikes"],
+            model_name=zone["model"],
+            model_params=zone["params"],
             elo_before=grid_stats.grid_elo,
             prepare_ends_at=started_at,
             started_at=started_at,
             ends_at=started_at + timedelta(seconds=services.GRID_GAME_SECONDS),
         )
+        services.generate_bot_selections(match)
 
     return Response(_grid_match_payload(match, now, player))
 
@@ -539,7 +571,10 @@ def grid_match_state(request, match_id):
 
 
 @api_view(["POST"])
-def grid_match_click(request, match_id):
+def grid_match_select_cell(request, match_id):
+    """Player commits to a cell for a lock window. Scoring is server-side: the
+    strikes that land in this cell during its window count toward the score at
+    settlement (and in live payloads). Replaces the old click-per-point endpoint."""
     player = _player_from_request(request)
     if player is None:
         return Response(status=401)
@@ -563,8 +598,12 @@ def grid_match_click(request, match_id):
         max_cell = match.grid_cols * match.grid_rows
         if cell < 0 or cell >= max_cell:
             return Response({"error": "bad_cell"}, status=400)
-        match.status = "active"
-        match.player_score += 1
-        match.save(update_fields=["status", "player_score"])
+        if match.status != "active":
+            match.status = "active"
+            match.save(update_fields=["status"])
+        GridCellSelection.objects.create(
+            match=match, actor="player", cell=cell, started_at=now,
+            expires_at=now + timedelta(seconds=services.GRID_CELL_LOCK_SECONDS),
+        )
 
     return Response(_grid_match_payload(match, now, player))

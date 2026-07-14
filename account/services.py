@@ -15,9 +15,12 @@ from django.db.models import Count
 from django.db import transaction
 from django.utils import timezone
 
+from random import randint
+
 from lightning.models import LightningStrike, CountryStrike
+from lightning.eagz import Eagz1Config, Strike, best_zone, cell_for_point
 from . import analytics
-from .models import GridMatch, GridPlayerStats, Player, StrikeBet
+from .models import GridCellSelection, GridMatch, GridPlayerStats, Player, StrikeBet
 
 GAME_MS = 30_000
 PAYOUT_MULTIPLIER = 2
@@ -25,6 +28,7 @@ START_TOKENS = 100
 USERNAME_RE = re.compile(r"^[a-zA-Z0-9_-]{3,20}$")
 GRID_PREPARE_SECONDS = 5
 GRID_GAME_SECONDS = 60
+GRID_CELL_LOCK_SECONDS = 3          # how long a picked cell stays locked & scoring
 GRID_ELO_K = 32
 
 
@@ -68,6 +72,145 @@ def country_recent_count(country: str, seconds: int = 30, now=None) -> int:
         received_at__gte=now - dt.timedelta(seconds=seconds),
         received_at__lte=now,
     ).count()
+
+
+# --------------------------- grid zoning (EAGZ-1) ----------------------------
+
+EAGZ_CONFIG = Eagz1Config()          # baseline: W_round=60, W_obs=600, min_round_strikes=10
+EAGZ_BBOX_MARGIN_DEG = 1.0           # expand the country box so border grids see both sides
+EAGZ_MAX_STRIKES = 20000             # cap the observation query
+
+
+def _area_strikes(country: str, now):
+    """Strikes over W_obs for zone-finding around `country`.
+
+    Sourced GLOBALLY from LightningStrike within a bbox derived from the
+    country's own recent strikes (expanded by a margin). This makes zone
+    detection and the per-grid activity gate COUNTRY-AGNOSTIC: a grid straddling
+    a border counts strikes from both countries, which per-country counting
+    (CountryStrike) cannot do.
+    """
+    since = now - dt.timedelta(seconds=EAGZ_CONFIG.w_obs_seconds)
+    box = list(
+        CountryStrike.objects
+        .filter(country=country.upper(), received_at__gte=since)
+        .values_list("lat", "lon")
+    )
+    if not box:
+        return []
+    lats = [p[0] for p in box]
+    lons = [p[1] for p in box]
+    m = EAGZ_BBOX_MARGIN_DEG
+    rows = (
+        LightningStrike.objects
+        .filter(
+            received_at__gte=since,
+            lat__gte=min(lats) - m, lat__lte=max(lats) + m,
+            lon__gte=min(lons) - m, lon__lte=max(lons) + m,
+        )
+        .order_by("-received_at")
+        .values_list("lat", "lon", "received_at")[:EAGZ_MAX_STRIKES]
+    )
+    return [Strike(lat, lon, ra.timestamp()) for (lat, lon, ra) in rows]
+
+
+def eagz_zone_for_country(country: str, now=None):
+    """Run EAGZ-1 over the area around `country` and return the best playable
+    zone (dict with grid geometry + tags), or None if none qualifies."""
+    now = now or timezone.now()
+    strikes = _area_strikes(country, now)
+    if not strikes:
+        return None
+    return best_zone(strikes, EAGZ_CONFIG, now.timestamp())
+
+
+# --------------------- server-authoritative grid scoring ---------------------
+
+def _zone_from_match(match: GridMatch):
+    """Reconstruct the zone dict (for cell_for_point) from the stored geometry,
+    or None for legacy matches without a persisted zone."""
+    if match.area_min_lat is None:
+        return None
+    return {
+        "min_lat": match.area_min_lat,
+        "max_lat": match.area_max_lat,
+        "min_lon": match.area_min_lon,
+        "max_lon": match.area_max_lon,
+        "cols": match.grid_cols,
+        "rows": match.grid_rows,
+    }
+
+
+def generate_bot_selections(match: GridMatch):
+    """Bot's full cell schedule for the round: back-to-back random cells, one per
+    lock window. Created once at match start so scoring is reproducible."""
+    n_cells = max(1, match.grid_cols * match.grid_rows)
+    lock = dt.timedelta(seconds=GRID_CELL_LOCK_SECONDS)
+    sels, t = [], match.started_at
+    while t < match.ends_at:
+        end = min(t + lock, match.ends_at)
+        sels.append(GridCellSelection(
+            match=match, actor="bot", cell=randint(0, n_cells - 1),
+            started_at=t, expires_at=end,
+        ))
+        t = end
+    GridCellSelection.objects.bulk_create(sels)
+
+
+def _score_selections(selections, zone, strikes) -> int:
+    """Count strikes landing in each selection's cell within its effective window.
+    Windows are capped at the next selection's start so they never double-count."""
+    sels = sorted(selections, key=lambda s: s.started_at)
+    score = 0
+    for i, s in enumerate(sels):
+        end = s.expires_at
+        if i + 1 < len(sels):
+            end = min(end, sels[i + 1].started_at)
+        for lat, lon, received_at in strikes:
+            if s.started_at <= received_at <= end and cell_for_point(lat, lon, zone) == s.cell:
+                score += 1
+    return score
+
+
+def _round_strikes_in_zone(match: GridMatch, until):
+    """LightningStrike inside the zone bbox over [started_at, until] (global, so
+    it is border-agnostic like the zone gate)."""
+    zone = _zone_from_match(match)
+    if zone is None:
+        return []
+    return list(
+        LightningStrike.objects.filter(
+            received_at__gte=match.started_at, received_at__lte=until,
+            lat__gte=zone["min_lat"], lat__lte=zone["max_lat"],
+            lon__gte=zone["min_lon"], lon__lte=zone["max_lon"],
+        ).values_list("lat", "lon", "received_at")
+    )
+
+
+def live_scores(match: GridMatch, now):
+    """Authoritative (player, bot) scores computed from strikes-in-cell up to
+    min(now, ends_at). Falls back to stored scores for legacy zoneless matches."""
+    zone = _zone_from_match(match)
+    if zone is None:
+        return match.player_score, match.bot_score
+    until = min(now, match.ends_at)
+    strikes = _round_strikes_in_zone(match, until)
+    sels = list(match.selections.all())
+    player = _score_selections([s for s in sels if s.actor == "player"], zone, strikes)
+    bot = _score_selections(
+        [s for s in sels if s.actor == "bot" and s.started_at <= until], zone, strikes
+    )
+    return player, bot
+
+
+def bot_cell_at(match: GridMatch, now):
+    """The bot's currently-active cell (for client display), or None."""
+    s = (
+        match.selections
+        .filter(actor="bot", started_at__lte=now, expires_at__gt=now)
+        .first()
+    )
+    return s.cell if s else None
 
 
 def grid_stats_for_player(player_or_id, lock=False) -> GridPlayerStats:
@@ -146,7 +289,12 @@ def settle_grid_match(match_id: int, now=None):
 
     player = Player.objects.select_for_update().get(pk=match.player_id)
     stats = grid_stats_for_player(player.id, lock=True)
-    match.bot_score = max(match.bot_score, bot_score_for(match, now))
+    if _zone_from_match(match) is not None:
+        # Server-authoritative: score both sides from strikes-in-cell.
+        match.player_score, match.bot_score = live_scores(match, match.ends_at)
+    else:
+        # Legacy zoneless match: fall back to the simulated bot.
+        match.bot_score = max(match.bot_score, bot_score_for(match, now))
     if match.player_score > match.bot_score:
         result = 1.0
     elif match.player_score == match.bot_score:
@@ -169,7 +317,7 @@ def settle_grid_match(match_id: int, now=None):
     match.bot_elo_after = match.bot_elo - delta
     match.settled_at = now
     match.save(update_fields=[
-        "status", "bot_score", "elo_after", "bot_elo_after", "settled_at",
+        "status", "player_score", "bot_score", "elo_after", "bot_elo_after", "settled_at",
     ])
     analytics.capture("grid_match_resolved", player, properties={
         "match_id": match.id,
