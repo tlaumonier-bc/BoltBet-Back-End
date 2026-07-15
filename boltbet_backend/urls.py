@@ -4,7 +4,8 @@ from django.urls import include, path
 from django.http import JsonResponse, HttpResponse
 
 from lightning.views import (
-    country_strikes, nearby_strikes, recent_strikes, strikes_per_minute,
+    country_strikes, nearby_strikes, recent_strikes, strikes_per_minute, strikes_in_bounds,
+    cities_in_bounds,
     weather_now, weather_tile, strikes_count, country_news, growth_hotspots,
     country_map_stats,
 )
@@ -12,7 +13,7 @@ from account.views import (
     username_available, register, profile,
     change_username, change_country, place_bet, bet_result, claim_tokens,
     leaderboard, leaderboard_summary, leaderboard_context,
-    grid_active_countries, grid_start_match, grid_match_state, grid_match_click,
+    grid_active_countries, grid_start_match, grid_match_state, grid_match_select_cell,
 )
 from account.admin_views import admin_accounts_growth
 from account.firebase_auth import firebase_exchange
@@ -50,6 +51,8 @@ api_urlpatterns = [
     path("strikes/by-country/", country_strikes),
     path("strikes/recent/", recent_strikes),
     path("strikes/nearby/", nearby_strikes),
+    path("strikes/in-bounds/", strikes_in_bounds),
+    path("cities/in-bounds/", cities_in_bounds),
     path("strikes/per-minute/", strikes_per_minute),
     path("strikes/count/", strikes_count),
 
@@ -81,7 +84,7 @@ api_urlpatterns = [
     path("game/grid/active-countries/", grid_active_countries),
     path("game/grid/match/", grid_start_match),
     path("game/grid/match/<int:match_id>/", grid_match_state),
-    path("game/grid/match/<int:match_id>/click/", grid_match_click),
+    path("game/grid/match/<int:match_id>/select-cell/", grid_match_select_cell),
 
     # --- Private product admin ---
     path("admin/accounts-growth/", admin_accounts_growth),
