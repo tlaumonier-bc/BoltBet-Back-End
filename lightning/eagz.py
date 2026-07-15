@@ -49,7 +49,9 @@ class Eagz1Config:
     min_region_activity: int = 5          # coarse-cell strike floor (Stage 1)
     sigma_k: float = 1.8                  # grid half-extent = k * weighted std-dev of strikes
     focus_radius_km: float = 30.0         # keep only strikes within this of the densest spot
-    target_strikes_per_cell: float = 0.7  # adaptive cell count aims for this many/cell/round
+    target_strikes_per_cell: float = 1.5  # adaptive cell count aims for this many/cell/round
+    #                                       (higher -> fewer cells -> grid spans 6x4..10x8
+    #                                        by activity instead of pinning at 10x8)
     min_grid_cols: int = 6                # floor so the grid never gets too small to play
     min_grid_rows: int = 4                # (grid_cols x grid_rows below is the cap)
     lambda_target: float = 0.7            # (legacy density target; unused since sizing is extent-based)
