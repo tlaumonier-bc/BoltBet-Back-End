@@ -48,6 +48,7 @@ class Eagz1Config:
     coarse_deg: float = 0.3               # ~33 km fixed grid (~geohash p4-5)
     min_region_activity: int = 5          # coarse-cell strike floor (Stage 1)
     sigma_k: float = 2.0                  # grid half-extent = k * weighted std-dev of strikes
+    focus_radius_km: float = 40.0         # keep only strikes within this of the densest spot
     target_strikes_per_cell: float = 0.7  # adaptive cell count aims for this many/cell/round
     min_grid_cols: int = 6                # floor so the grid never gets too small to play
     min_grid_rows: int = 4                # (grid_cols x grid_rows below is the cap)
@@ -119,6 +120,30 @@ def _weighted_centroid(strikes: list[Strike], now: float, tau: float):
     return sy / sw, sx / sw  # (lat, lon)
 
 
+def _focus_on_peak(strikes, cfg: Eagz1Config, now: float):
+    """Keep only strikes within focus_radius_km of the densest coarse bucket, so a
+    region containing two storm cells zooms onto the hotter one instead of framing
+    a huge box that spans both with strikes in only a few cells."""
+    weight_by_bucket: dict[tuple[int, int], float] = {}
+    for s in strikes:
+        k = _coarse_key(s.lat, s.lon, cfg.coarse_deg)
+        weight_by_bucket[k] = weight_by_bucket.get(k, 0.0) + _weight(s.ts, now, cfg.tau_seconds)
+    if not weight_by_bucket:
+        return strikes
+    peak = max(weight_by_bucket, key=weight_by_bucket.get)
+    pc_lon = (peak[0] + 0.5) * cfg.coarse_deg - 180.0
+    pc_lat = (peak[1] + 0.5) * cfg.coarse_deg - 90.0
+    r2 = cfg.focus_radius_km ** 2
+    cos = _cos_lat(pc_lat)
+    focused = []
+    for s in strikes:
+        dlat = (s.lat - pc_lat) * KM_PER_DEG
+        dlon = (s.lon - pc_lon) * KM_PER_DEG * cos
+        if dlat * dlat + dlon * dlon <= r2:
+            focused.append(s)
+    return focused or strikes
+
+
 def _weighted_spread_km(strikes, center_lat, center_lon, now, tau):
     """Temporally-weighted std-dev of strike positions around the centroid, in km."""
     sw = svlat = svlon = 0.0
@@ -164,6 +189,12 @@ def _adaptive_dims(recent_round_strikes, sig_lat_km, sig_lon_km, cfg: Eagz1Confi
 
 def _size_and_validate(region_strikes: list[Strike], cfg: Eagz1Config, now: float):
     """Stages 2 + 3 for one region. Returns a zone dict or None."""
+    if not region_strikes:
+        return None
+
+    # Zoom onto the densest storm cell in this region (drops a second blob + the
+    # empty gap between them, which otherwise inflates the bbox).
+    region_strikes = _focus_on_peak(region_strikes, cfg, now)
     if not region_strikes:
         return None
 
