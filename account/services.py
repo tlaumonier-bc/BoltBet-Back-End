@@ -15,7 +15,7 @@ from django.db.models import Count
 from django.db import transaction
 from django.utils import timezone
 
-from random import randint
+from random import choices, randint
 
 from lightning.models import LightningStrike, CountryStrike
 from lightning.eagz import Eagz1Config, Strike, best_zone, cell_for_point
@@ -141,18 +141,39 @@ def _zone_from_match(match: GridMatch):
     }
 
 
+BOT_LOOKBACK_SECONDS = 300   # weight bot picks by strikes in the zone over this window
+
+
 def generate_bot_selections(match: GridMatch):
-    """Bot's full cell schedule for the round: back-to-back random cells, one per
-    lock window. Created once at match start so scoring is reproducible."""
+    """Bot's full cell schedule for the round: one cell per lock window, created
+    once at match start. A "little smarter" than random — cells are sampled
+    WEIGHTED by recent strike density in that cell (cells that have been active
+    lately are likelier to keep getting hit). Smoothing (+1 baseline) and
+    resampling every window keep it beatable: it leans toward hot cells but
+    doesn't perfectly camp the single best one, and it can't react live the way a
+    player can."""
     n_cells = max(1, match.grid_cols * match.grid_rows)
     lock = dt.timedelta(seconds=GRID_CELL_LOCK_SECONDS)
+
+    weights = [1.0] * n_cells
+    zone = _zone_from_match(match)
+    if zone is not None:
+        since = match.started_at - dt.timedelta(seconds=BOT_LOOKBACK_SECONDS)
+        for lat, lon in LightningStrike.objects.filter(
+            received_at__gte=since,
+            lat__gte=zone["min_lat"], lat__lte=zone["max_lat"],
+            lon__gte=zone["min_lon"], lon__lte=zone["max_lon"],
+        ).values_list("lat", "lon"):
+            cell = cell_for_point(lat, lon, zone)
+            if cell is not None:
+                weights[cell] += 1.0
+
+    cells = list(range(n_cells))
     sels, t = [], match.started_at
     while t < match.ends_at:
         end = min(t + lock, match.ends_at)
-        sels.append(GridCellSelection(
-            match=match, actor="bot", cell=randint(0, n_cells - 1),
-            started_at=t, expires_at=end,
-        ))
+        cell = choices(cells, weights=weights, k=1)[0]
+        sels.append(GridCellSelection(match=match, actor="bot", cell=cell, started_at=t, expires_at=end))
         t = end
     GridCellSelection.objects.bulk_create(sels)
 
@@ -201,14 +222,13 @@ def live_scores(match: GridMatch, now):
     return player, bot
 
 
-def bot_cell_at(match: GridMatch, now):
-    """The bot's currently-active cell (for client display), or None."""
-    s = (
+def bot_selection_at(match: GridMatch, now):
+    """The bot's currently-active selection (cell + lock window), or None."""
+    return (
         match.selections
         .filter(actor="bot", started_at__lte=now, expires_at__gt=now)
         .first()
     )
-    return s.cell if s else None
 
 
 def grid_stats_for_player(player_or_id, lock=False) -> GridPlayerStats:
