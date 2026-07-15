@@ -120,10 +120,9 @@ def _grid_match_payload(match, now=None, player=None):
         match = services.settle_grid_match(match.id, now) or match
     if match.status == "settled":
         player_score, bot_score = match.player_score, match.bot_score
-        bot_sel = None
+        bot_cell, bot_expires = None, None
     else:
-        player_score, bot_score = services.live_scores(match, now)
-        bot_sel = services.bot_selection_at(match, now)
+        player_score, bot_score, bot_cell, bot_expires = services.live_state(match, now)
     player = player or Player.objects.get(pk=match.player_id)
     return {
         "matchId": str(match.id),
@@ -156,8 +155,8 @@ def _grid_match_payload(match, now=None, player=None):
             "elo": match.bot_elo,
             "eloAfter": match.bot_elo_after,
             "bot": True,
-            "selectedCell": bot_sel.cell if bot_sel else None,
-            "selectedCellExpiresAt": bot_sel.expires_at.isoformat() if bot_sel else None,
+            "selectedCell": bot_cell,
+            "selectedCellExpiresAt": bot_expires.isoformat() if bot_expires else None,
         },
         "timing": {
             "createdAt": match.created_at.isoformat(),
@@ -557,7 +556,6 @@ def grid_start_match(request):
             started_at=started_at,
             ends_at=started_at + timedelta(seconds=services.GRID_GAME_SECONDS),
         )
-        services.generate_bot_selections(match)
 
     return Response(_grid_match_payload(match, now, player))
 

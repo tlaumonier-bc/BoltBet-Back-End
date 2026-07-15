@@ -10,12 +10,13 @@ so the resolver agrees with what the strike feeds expose.
 import datetime as dt
 import math
 import re
+from collections import namedtuple
 
 from django.db.models import Count
 from django.db import transaction
 from django.utils import timezone
 
-from random import choices, randint
+from random import randint
 
 from lightning.models import LightningStrike, CountryStrike
 from lightning.eagz import Eagz1Config, Strike, best_zone, cell_for_point
@@ -143,41 +144,37 @@ def _zone_from_match(match: GridMatch):
     }
 
 
-BOT_LOOKBACK_SECONDS = 300   # weight bot picks by strikes in the zone over this window
+_BotSel = namedtuple("_BotSel", "cell started_at expires_at")
 
 
-def generate_bot_selections(match: GridMatch):
-    """Bot's full cell schedule for the round: one cell per lock window, created
-    once at match start. A "little smarter" than random — cells are sampled
-    WEIGHTED by recent strike density in that cell (cells that have been active
-    lately are likelier to keep getting hit). Smoothing (+1 baseline) and
-    resampling every window keep it beatable: it leans toward hot cells but
-    doesn't perfectly camp the single best one, and it can't react live the way a
-    player can."""
-    n_cells = max(1, match.grid_cols * match.grid_rows)
+def _bot_selections(match: GridMatch, zone, strikes, until):
+    """Reactive bot, computed live from the round's real strikes (no pre-baked
+    schedule). At each lock boundary it instantly picks the cell of the MOST
+    RECENT strike so far — lightning clusters, so the last strike's cell is the
+    best bet for the next one. So the bot always has a cell once any strike has
+    landed and genuinely chases the action, while committing for the same 3s lock
+    as the player (it reacts instantly at each boundary but can't teleport onto
+    every strike mid-lock)."""
+    hits = []
+    for lat, lon, received_at in strikes:
+        cell = cell_for_point(lat, lon, zone)
+        if cell is not None:
+            hits.append((received_at, cell))
+    hits.sort(key=lambda h: h[0])  # oldest -> newest
+
     lock = dt.timedelta(seconds=GRID_CELL_LOCK_SECONDS)
-
-    weights = [1.0] * n_cells
-    zone = _zone_from_match(match)
-    if zone is not None:
-        since = match.started_at - dt.timedelta(seconds=BOT_LOOKBACK_SECONDS)
-        for lat, lon in LightningStrike.objects.filter(
-            received_at__gte=since,
-            lat__gte=zone["min_lat"], lat__lte=zone["max_lat"],
-            lon__gte=zone["min_lon"], lon__lte=zone["max_lon"],
-        ).values_list("lat", "lon"):
-            cell = cell_for_point(lat, lon, zone)
-            if cell is not None:
-                weights[cell] += 1.0
-
-    cells = list(range(n_cells))
-    sels, t = [], match.started_at
-    while t < match.ends_at:
-        end = min(t + lock, match.ends_at)
-        cell = choices(cells, weights=weights, k=1)[0]
-        sels.append(GridCellSelection(match=match, actor="bot", cell=cell, started_at=t, expires_at=end))
-        t = end
-    GridCellSelection.objects.bulk_create(sels)
+    sels = []
+    t = match.started_at
+    while t < until:
+        cell = None
+        for received_at, c in reversed(hits):  # newest first: latest strike <= t
+            if received_at <= t:
+                cell = c
+                break
+        if cell is not None:
+            sels.append(_BotSel(cell, t, t + lock))
+        t += lock
+    return sels
 
 
 def _score_selections(selections, zone, strikes, grace_seconds=0.0) -> int:
@@ -215,31 +212,25 @@ def _round_strikes_in_zone(match: GridMatch, until):
     )
 
 
-def live_scores(match: GridMatch, now):
-    """Authoritative (player, bot) scores computed from strikes-in-cell up to
-    min(now, ends_at). Falls back to stored scores for legacy zoneless matches."""
+def live_state(match: GridMatch, now):
+    """Authoritative live state: (player_score, bot_score, bot_cell, bot_expires)
+    from strikes-in-cell up to min(now, ends_at). The bot's cells are reactive and
+    computed live. Falls back to stored scores for legacy zoneless matches."""
     zone = _zone_from_match(match)
     if zone is None:
-        return match.player_score, match.bot_score
+        return match.player_score, match.bot_score, None, None
     until = min(now, match.ends_at)
     strikes = _round_strikes_in_zone(match, until)
-    sels = list(match.selections.all())
-    player = _score_selections(
-        [s for s in sels if s.actor == "player"], zone, strikes, GRID_SCORE_GRACE_SECONDS
-    )
-    bot = _score_selections(
-        [s for s in sels if s.actor == "bot" and s.started_at <= until], zone, strikes, GRID_SCORE_GRACE_SECONDS
-    )
-    return player, bot
-
-
-def bot_selection_at(match: GridMatch, now):
-    """The bot's currently-active selection (cell + lock window), or None."""
-    return (
-        match.selections
-        .filter(actor="bot", started_at__lte=now, expires_at__gt=now)
-        .first()
-    )
+    player_sels = list(match.selections.filter(actor="player"))
+    bot_sels = _bot_selections(match, zone, strikes, until)
+    player = _score_selections(player_sels, zone, strikes, GRID_SCORE_GRACE_SECONDS)
+    bot = _score_selections(bot_sels, zone, strikes, GRID_SCORE_GRACE_SECONDS)
+    bot_cell = bot_expires = None
+    if bot_sels:
+        cur = bot_sels[-1]
+        if cur.started_at <= now < cur.expires_at:
+            bot_cell, bot_expires = cur.cell, cur.expires_at
+    return player, bot, bot_cell, bot_expires
 
 
 def grid_stats_for_player(player_or_id, lock=False) -> GridPlayerStats:
@@ -320,7 +311,7 @@ def settle_grid_match(match_id: int, now=None):
     stats = grid_stats_for_player(player.id, lock=True)
     if _zone_from_match(match) is not None:
         # Server-authoritative: score both sides from strikes-in-cell.
-        match.player_score, match.bot_score = live_scores(match, match.ends_at)
+        match.player_score, match.bot_score, _, _ = live_state(match, match.ends_at)
     else:
         # Legacy zoneless match: fall back to the simulated bot.
         match.bot_score = max(match.bot_score, bot_score_for(match, now))
