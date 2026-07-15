@@ -29,6 +29,8 @@ USERNAME_RE = re.compile(r"^[a-zA-Z0-9_-]{3,20}$")
 GRID_PREPARE_SECONDS = 2          # short "Ready? / Go!" intro before play
 GRID_GAME_SECONDS = 60
 GRID_CELL_LOCK_SECONDS = 3          # how long a picked cell stays locked & scoring
+GRID_SCORE_GRACE_SECONDS = 3        # count strikes landing shortly BEFORE a pick too,
+#                                     so a strike you just saw land still scores
 GRID_ELO_K = 32
 
 
@@ -178,18 +180,22 @@ def generate_bot_selections(match: GridMatch):
     GridCellSelection.objects.bulk_create(sels)
 
 
-def _score_selections(selections, zone, strikes) -> int:
-    """Count strikes landing in each selection's cell within its 3s lock window
-    (capped at the next selection's start so windows never double-count)."""
-    sels = sorted(selections, key=lambda s: s.started_at)
+def _score_selections(selections, zone, strikes, grace_seconds=0.0) -> int:
+    """Count strikes landing in a selection's cell within [started_at - grace,
+    expires_at]. The grace lets a strike the player just watched land still score
+    (feed/animation/reaction lag). Each strike is counted at most once even when
+    the grace makes windows overlap."""
+    grace = dt.timedelta(seconds=grace_seconds)
+    sels = list(selections)
     score = 0
-    for i, s in enumerate(sels):
-        end = s.expires_at
-        if i + 1 < len(sels):
-            end = min(end, sels[i + 1].started_at)
-        for lat, lon, received_at in strikes:
-            if s.started_at <= received_at <= end and cell_for_point(lat, lon, zone) == s.cell:
+    for lat, lon, received_at in strikes:
+        cell = cell_for_point(lat, lon, zone)
+        if cell is None:
+            continue
+        for s in sels:
+            if s.cell == cell and (s.started_at - grace) <= received_at <= s.expires_at:
                 score += 1
+                break
     return score
 
 
@@ -199,9 +205,10 @@ def _round_strikes_in_zone(match: GridMatch, until):
     zone = _zone_from_match(match)
     if zone is None:
         return []
+    since = match.started_at - dt.timedelta(seconds=GRID_SCORE_GRACE_SECONDS)
     return list(
         LightningStrike.objects.filter(
-            received_at__gte=match.started_at, received_at__lte=until,
+            received_at__gte=since, received_at__lte=until,
             lat__gte=zone["min_lat"], lat__lte=zone["max_lat"],
             lon__gte=zone["min_lon"], lon__lte=zone["max_lon"],
         ).values_list("lat", "lon", "received_at")
@@ -217,8 +224,12 @@ def live_scores(match: GridMatch, now):
     until = min(now, match.ends_at)
     strikes = _round_strikes_in_zone(match, until)
     sels = list(match.selections.all())
-    player = _score_selections([s for s in sels if s.actor == "player"], zone, strikes)
-    bot = _score_selections([s for s in sels if s.actor == "bot" and s.started_at <= until], zone, strikes)
+    player = _score_selections(
+        [s for s in sels if s.actor == "player"], zone, strikes, GRID_SCORE_GRACE_SECONDS
+    )
+    bot = _score_selections(
+        [s for s in sels if s.actor == "bot" and s.started_at <= until], zone, strikes, GRID_SCORE_GRACE_SECONDS
+    )
     return player, bot
 
 
