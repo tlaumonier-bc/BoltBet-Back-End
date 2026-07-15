@@ -47,8 +47,8 @@ class Eagz1Config:
     w_obs_seconds: float = 600.0          # 10 min
     coarse_deg: float = 0.3               # ~33 km fixed grid (~geohash p4-5)
     min_region_activity: int = 5          # coarse-cell strike floor (Stage 1)
-    sigma_k: float = 2.0                  # grid half-extent = k * weighted std-dev of strikes
-    focus_radius_km: float = 40.0         # keep only strikes within this of the densest spot
+    sigma_k: float = 1.8                  # grid half-extent = k * weighted std-dev of strikes
+    focus_radius_km: float = 30.0         # keep only strikes within this of the densest spot
     target_strikes_per_cell: float = 0.7  # adaptive cell count aims for this many/cell/round
     min_grid_cols: int = 6                # floor so the grid never gets too small to play
     min_grid_rows: int = 4                # (grid_cols x grid_rows below is the cap)
