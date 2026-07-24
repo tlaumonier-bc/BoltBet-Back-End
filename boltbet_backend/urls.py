@@ -9,6 +9,7 @@ from lightning.views import (
     weather_now, weather_tile, strikes_count, country_news, growth_hotspots,
     country_map_stats,
 )
+from lightning.weather import weather_zone, storm_track
 from account.views import (
     username_available, register, profile,
     change_username, change_country, place_bet, bet_result, claim_tokens,
@@ -58,6 +59,8 @@ api_urlpatterns = [
 
     # --- Weather (server-side OWM key) ---
     path("weather/now/", weather_now),
+    path("weather/zone/", weather_zone),
+    path("weather/storm-track/", storm_track),
     path("weather/tiles/<str:layer>/<int:z>/<int:x>/<int:y>.png", weather_tile),
 
     # --- Local SEO freshness ---
