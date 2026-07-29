@@ -59,6 +59,8 @@ steps:
       - |
         source /workspace/deploy.env
         # Repair accidental bad OWM version if present (probe left "test" as v3).
+        # :latest still resolves to a disabled newest version, so destroy it.
+        gcloud secrets versions destroy 3 --secret=boltbet-owm-api-key --project="$PROJECT_ID" --quiet 2>/dev/null || true
         gcloud secrets versions disable 3 --secret=boltbet-owm-api-key --project="$PROJECT_ID" 2>/dev/null || true
 
         if [ -z "$${EUMETSAT_SECRETS}" ]; then
