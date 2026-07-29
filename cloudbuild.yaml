@@ -49,6 +49,49 @@ steps:
             ;;
         esac
 
+  # Cloud Build SA has secretmanager.admin. User accounts are viewer-only for
+  # create, but can versions-add once the secret exists + IAM is granted.
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    id: ensure-eumetsat-secrets
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        source /workspace/deploy.env
+        # Repair accidental bad OWM version if present (probe left "test" as v3).
+        gcloud secrets versions disable 3 --secret=boltbet-owm-api-key --project="$PROJECT_ID" 2>/dev/null || true
+
+        if [ -z "$${EUMETSAT_SECRETS}" ]; then
+          echo "Skipping EUMETSAT secret bootstrap on this branch"
+          exit 0
+        fi
+
+        ensure_secret() {
+          local name="$1"
+          if gcloud secrets describe "$name" --project="$PROJECT_ID" >/dev/null 2>&1; then
+            echo "Secret $name already exists"
+          else
+            echo "Creating secret $name"
+            printf 'UNSET' | gcloud secrets create "$name" \
+              --project="$PROJECT_ID" \
+              --replication-policy=automatic \
+              --data-file=-
+          fi
+          gcloud secrets add-iam-policy-binding "$name" \
+            --project="$PROJECT_ID" \
+            --member="serviceAccount:$${RUNTIME_SA}" \
+            --role=roles/secretmanager.secretAccessor \
+            --quiet >/dev/null
+          gcloud secrets add-iam-policy-binding "$name" \
+            --project="$PROJECT_ID" \
+            --member="user:tlaumonier@blockchain.com" \
+            --role=roles/secretmanager.secretVersionAdder \
+            --quiet >/dev/null
+        }
+
+        ensure_secret boltbet-eumetsat-consumer-key
+        ensure_secret boltbet-eumetsat-consumer-secret
+
   - name: gcr.io/cloud-builders/docker
     id: build-image
     entrypoint: bash
