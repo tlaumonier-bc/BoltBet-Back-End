@@ -96,3 +96,36 @@ Run: `node test/layers-coverage.mjs`.
 ## Config (env, all with sane defaults)
 `WEATHER_CACHE_SECONDS=900`, `WEATHER_SAMPLE_N=4`, `OPEN_METEO_MODEL=gfs_seamless`,
 `STORM_TRACK_WINDOW_MIN=10`, `STORM_TRACK_CACHE_SECONDS=30`.
+
+## Later layers
+
+### Radar reflectivity (dBZ) — `lightning/radar.py` → `/api/weather/radar/`
+RainViewer free tier (no key). Backend caches the frame INDEX (~60s); the browser
+loads tile IMAGES straight from the radar host (`radarTiles` in geo.ts, same z/x/y
+grid as the satellite). Control HUD: opacity, animation loop, "data unavailable".
+Provider behind `RadarProvider` — swap to EUMETNET OPERA / a paid plan for
+commercial use (free tier is personal/educational).
+Env: `RADAR_CACHE_SECONDS=60`, `RADAR_TILE_SIZE=256`, `RADAR_COLOR=4`,
+`RADAR_OPTIONS=0_0`, `RADAR_FRAMES=4`.
+
+### Total lightning (IC+CG) — `lightning/total_lightning.py` → `/api/lightning/total/`
+Leading indicator (IC precedes CG). Provider behind `TotalLightningProvider`:
+- **EumetsatMtgLiProvider** (real): EUMETSAT MTG-LI **LI-2-LFL** (Lightning Flashes,
+  collection `EO:EUM:DAT:0691`). OAuth client_credentials → latest LFL product(s) →
+  download zip → parse netCDF (h5py; lat/lon scaled int16 ×0.0027, `flash_time` =
+  seconds since 2000-01-01) → aggregate onto the zone grid. Recent flashes cached
+  ~180s; a background thread (`RUN_MTGLI_REFRESH_IN_PROCESS`) keeps it warm so no
+  user request pays the ~5s download. Covers the 0° disc (Europe/Africa/Mid-East);
+  zones elsewhere return no flashes.
+- **MockProvider** (default): synthetic field from our own recent CG strikes.
+Frontend: magenta blobs (distinct from the orange CG heatmap) + per-cell ▲/▼
+flash-rate-trend badges + "data unavailable" state.
+
+**To enable the REAL source on the backend, set env (never commit secrets):**
+`TOTAL_LIGHTNING_SOURCE=eumetsat`, `EUMETSAT_CONSUMER_KEY=…`,
+`EUMETSAT_CONSUMER_SECRET=…`, and `RUN_MTGLI_REFRESH_IN_PROCESS=true` (warmer).
+Register a free account at https://data.eumetsat.int (EO Portal → Data Store → API
+keys) to get the consumer key/secret. New dep: `h5py` (manylinux wheel bundles
+HDF5). Other env: `TOTAL_LIGHTNING_CACHE_SECONDS=45`,
+`TOTAL_LIGHTNING_REFRESH_SECONDS=180`, `TOTAL_LIGHTNING_PRODUCTS=2`,
+`TOTAL_LIGHTNING_SAMPLE_N=6`.

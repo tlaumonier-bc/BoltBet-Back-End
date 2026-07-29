@@ -42,6 +42,11 @@ TRIM_START_DELAY_S = 90      # stagger off the purge thread
 # resolver: settle pending Up/Down bets whose game window has closed.
 RESOLVER_INTERVAL_S = 2.0
 
+# mtg-li: pre-warm the EUMETSAT total-lightning flash cache so user requests
+# never pay the download+parse cost. Interval < the cache TTL so it stays warm.
+MTGLI_INTERVAL_S = int(os.environ.get("TOTAL_LIGHTNING_REFRESH_SECONDS", "180")) - 15
+MTGLI_START_DELAY_S = 20
+
 _started = False
 _lock = threading.Lock()
 
@@ -106,6 +111,25 @@ def _run_resolver():
         time.sleep(RESOLVER_INTERVAL_S)
 
 
+def _run_mtgli_refresh():
+    """Keep the EUMETSAT MTG-LI flash cache warm (see lightning/total_lightning).
+
+    Forces a refresh by clearing the cached list, then repopulating it, so a real
+    user request always hits a warm cache instead of paying the ~5s download.
+    """
+    from django.core.cache import cache
+    from lightning.total_lightning import _fetch_recent_flashes
+    time.sleep(MTGLI_START_DELAY_S)
+    while True:
+        try:
+            cache.delete("mtgli:flashes")
+            n = len(_fetch_recent_flashes())
+            logger.info("mtg-li refresh: cached %d flashes", n)
+        except Exception as exc:
+            logger.exception("mtg-li refresh thread error: %r", exc)
+        time.sleep(max(30, MTGLI_INTERVAL_S))
+
+
 def start_background_threads():
     """Start the enabled background daemon threads exactly once per process."""
     global _started
@@ -119,6 +143,7 @@ def start_background_threads():
         ("RUN_PURGE_IN_PROCESS", _run_purge, "lightning-purge"),
         ("RUN_TRIM_IN_PROCESS", _run_trim, "lightning-trim"),
         ("RUN_RESOLVER_IN_PROCESS", _run_resolver, "bet-resolver"),
+        ("RUN_MTGLI_REFRESH_IN_PROCESS", _run_mtgli_refresh, "mtg-li-refresh"),
     ]
 
     started_any = False

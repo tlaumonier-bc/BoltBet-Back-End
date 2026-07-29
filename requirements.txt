@@ -10,3 +10,4 @@ websockets==16.0
 whitenoise==6.12.0
 redis==8.0.0
 reverse_geocoder==1.5.1
+h5py==3.16.0  # parse EUMETSAT MTG-LI netCDF (HDF5) for the Total lightning layer
