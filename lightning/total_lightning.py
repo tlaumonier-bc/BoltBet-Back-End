@@ -242,6 +242,14 @@ def _fetch_recent_flashes(timeout=30):
 
 
 class EumetsatMtgLiProvider:
+    """Real MTG-LI over the 0° disc (Europe/Africa/Middle East). Because the game's
+    hottest zones are worldwide, zones OUTSIDE the disc get no satellite flashes —
+    there we fall back to the strike-derived field so the layer is useful globally.
+    The response `source` tells them apart ("mtg-li" vs "mtg-li-mock")."""
+
+    def __init__(self):
+        self._fallback = MockProvider()
+
     def flashes(self, min_lat, max_lat, min_lon, max_lon, n):
         allf = _fetch_recent_flashes()
         lo, hi = min(min_lat, max_lat), max(min_lat, max_lat)
@@ -251,7 +259,12 @@ class EumetsatMtgLiProvider:
             if lo <= la <= hi and ((min_lon <= ln <= max_lon) if not wrap else (ln >= min_lon or ln <= max_lon))
         ]
         now_ms = timezone.now().timestamp() * 1000.0
-        return aggregate_flash_field(pts, min_lat, max_lat, min_lon, max_lon, n, now_ms, 1.0, "mtg-li")
+        out = aggregate_flash_field(pts, min_lat, max_lat, min_lon, max_lon, n, now_ms, 1.0, "mtg-li")
+        # No satellite flashes here (zone outside the LI disc, or genuinely quiet) →
+        # give the strike-derived estimate instead of an empty layer.
+        if out["summary"]["flashTotal"] == 0:
+            return self._fallback.flashes(min_lat, max_lat, min_lon, max_lon, n)
+        return out
 
 
 def _active_provider() -> TotalLightningProvider:
