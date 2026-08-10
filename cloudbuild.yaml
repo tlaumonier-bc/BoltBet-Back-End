@@ -19,6 +19,9 @@ steps:
         POSTHOG_PROJECT_TOKEN=phc_wJsYdcjNAwHdBdcbJngPR6oVhdb7ksDmBp3qqAu2EKnS
         POSTHOG_HOST=https://eu.i.posthog.com
         DISABLE_IAP=true
+        TL_SOURCE=eumetsat
+        TL_REFRESH=true
+        EUMETSAT_SECRETS=,EUMETSAT_CONSUMER_KEY=boltbet-eumetsat-consumer-key:latest,EUMETSAT_CONSUMER_SECRET=boltbet-eumetsat-consumer-secret:latest
         ENV
             ;;
           deploy/prod)
@@ -34,6 +37,9 @@ steps:
         POSTHOG_PROJECT_TOKEN=phc_wJsYdcjNAwHdBdcbJngPR6oVhdb7ksDmBp3qqAu2EKnS
         POSTHOG_HOST=https://eu.i.posthog.com
         DISABLE_IAP=false
+        TL_SOURCE=eumetsat
+        TL_REFRESH=true
+        EUMETSAT_SECRETS=,EUMETSAT_CONSUMER_KEY=boltbet-eumetsat-consumer-key:latest,EUMETSAT_CONSUMER_SECRET=boltbet-eumetsat-consumer-secret:latest
         ENV
             ;;
           *)
@@ -42,6 +48,51 @@ steps:
             exit 1
             ;;
         esac
+
+  # Cloud Build SA has secretmanager.admin. User accounts are viewer-only for
+  # create, but can versions-add once the secret exists + IAM is granted.
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    id: ensure-eumetsat-secrets
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        source /workspace/deploy.env
+        # Repair accidental bad OWM version if present (probe left "test" as v3).
+        # :latest still resolves to a disabled newest version, so destroy it.
+        gcloud secrets versions destroy 3 --secret=boltbet-owm-api-key --project="$PROJECT_ID" --quiet 2>/dev/null || true
+        gcloud secrets versions disable 3 --secret=boltbet-owm-api-key --project="$PROJECT_ID" 2>/dev/null || true
+
+        if [ -z "$${EUMETSAT_SECRETS}" ]; then
+          echo "Skipping EUMETSAT secret bootstrap on this branch"
+          exit 0
+        fi
+
+        ensure_secret() {
+          local name="$1"
+          if gcloud secrets describe "$name" --project="$PROJECT_ID" >/dev/null 2>&1; then
+            echo "Secret $name already exists"
+          else
+            echo "Creating secret $name"
+            printf 'UNSET' | gcloud secrets create "$name" \
+              --project="$PROJECT_ID" \
+              --replication-policy=automatic \
+              --data-file=-
+          fi
+          gcloud secrets add-iam-policy-binding "$name" \
+            --project="$PROJECT_ID" \
+            --member="serviceAccount:$${RUNTIME_SA}" \
+            --role=roles/secretmanager.secretAccessor \
+            --quiet >/dev/null
+          gcloud secrets add-iam-policy-binding "$name" \
+            --project="$PROJECT_ID" \
+            --member="user:tlaumonier@blockchain.com" \
+            --role=roles/secretmanager.secretVersionAdder \
+            --quiet >/dev/null
+        }
+
+        ensure_secret boltbet-eumetsat-consumer-key
+        ensure_secret boltbet-eumetsat-consumer-secret
 
   - name: gcr.io/cloud-builders/docker
     id: build-image
@@ -95,8 +146,8 @@ steps:
           --network=default \
           --subnet=default \
           --vpc-egress=private-ranges-only \
-          "--set-env-vars=^@^DJANGO_ENV=production@DJANGO_BEHIND_PROXY=true@DJANGO_DEBUG=false@DJANGO_ALLOWED_HOSTS=*@DJANGO_CSRF_TRUSTED_ORIGINS=$${CORS_ALLOWED_ORIGINS}@CORS_ALLOWED_ORIGINS=$${CORS_ALLOWED_ORIGINS}@FIREBASE_PROJECT_ID=$${FIREBASE_PROJECT_ID}@POSTHOG_PROJECT_TOKEN=$${POSTHOG_PROJECT_TOKEN}@POSTHOG_HOST=$${POSTHOG_HOST}@RUN_INGEST_IN_PROCESS=true@RUN_PURGE_IN_PROCESS=true@RUN_TRIM_IN_PROCESS=true@RUN_RESOLVER_IN_PROCESS=true@DB_PORT=5432@REDIS_PORT=6379" \
-          --set-secrets=DJANGO_SECRET_KEY=boltbet-django-secret-key:latest,OWM_API_KEY=boltbet-owm-api-key:latest,DB_HOST=boltbet-prod-db-host:latest,DB_NAME=boltbet-prod-db-name:latest,DB_USER=boltbet-prod-db-user:latest,DB_PASSWORD=boltbet-prod-db-password:latest,REDIS_HOST=boltbet-prod-redis-host:latest,REDIS_PASSWORD=boltbet-prod-redis-password:latest,GOOGLE_OAUTH_CLIENT_ID=boltbet-google-oauth-client-id:latest,GOOGLE_OAUTH_CLIENT_SECRET=boltbet-google-oauth-client-secret:latest
+          "--set-env-vars=^@^DJANGO_ENV=production@DJANGO_BEHIND_PROXY=true@DJANGO_DEBUG=false@DJANGO_ALLOWED_HOSTS=*@DJANGO_CSRF_TRUSTED_ORIGINS=$${CORS_ALLOWED_ORIGINS}@CORS_ALLOWED_ORIGINS=$${CORS_ALLOWED_ORIGINS}@FIREBASE_PROJECT_ID=$${FIREBASE_PROJECT_ID}@POSTHOG_PROJECT_TOKEN=$${POSTHOG_PROJECT_TOKEN}@POSTHOG_HOST=$${POSTHOG_HOST}@RUN_INGEST_IN_PROCESS=true@RUN_PURGE_IN_PROCESS=true@RUN_TRIM_IN_PROCESS=true@RUN_RESOLVER_IN_PROCESS=true@TOTAL_LIGHTNING_SOURCE=$${TL_SOURCE}@RUN_MTGLI_REFRESH_IN_PROCESS=$${TL_REFRESH}@DB_PORT=5432@REDIS_PORT=6379" \
+          --set-secrets="DJANGO_SECRET_KEY=boltbet-django-secret-key:latest,OWM_API_KEY=boltbet-owm-api-key:2,DB_HOST=boltbet-prod-db-host:latest,DB_NAME=boltbet-prod-db-name:latest,DB_USER=boltbet-prod-db-user:latest,DB_PASSWORD=boltbet-prod-db-password:latest,REDIS_HOST=boltbet-prod-redis-host:latest,REDIS_PASSWORD=boltbet-prod-redis-password:latest,GOOGLE_OAUTH_CLIENT_ID=boltbet-google-oauth-client-id:latest,GOOGLE_OAUTH_CLIENT_SECRET=boltbet-google-oauth-client-secret:latest$${EUMETSAT_SECRETS}"
 
 options:
   logging: CLOUD_LOGGING_ONLY
