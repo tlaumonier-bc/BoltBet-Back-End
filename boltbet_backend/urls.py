@@ -5,6 +5,7 @@ from django.http import JsonResponse, HttpResponse
 
 from lightning.views import (
     country_strikes, nearby_strikes, recent_strikes, strikes_per_minute, strikes_in_bounds,
+    strikes_trend_24h,
     cities_in_bounds,
     weather_now, weather_tile, strikes_count, country_news, growth_hotspots,
     country_map_stats,
@@ -57,6 +58,7 @@ api_urlpatterns = [
     path("strikes/in-bounds/", strikes_in_bounds),
     path("cities/in-bounds/", cities_in_bounds),
     path("strikes/per-minute/", strikes_per_minute),
+    path("strikes/trend-24h/", strikes_trend_24h),
     path("strikes/count/", strikes_count),
 
     # --- Weather (server-side OWM key) ---
