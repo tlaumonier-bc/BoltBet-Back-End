@@ -443,6 +443,42 @@ def strikes_per_minute(request):
 
 
 @api_view(["GET"])
+def strikes_trend_24h(request):
+    """
+    Worldwide strike volume trend: is the last 24h busier than the 24h before it?
+    Sums the per-minute rollup (StrikeRollupMinute, never purged) over
+    [now-24h, now] vs [now-48h, now-24h].
+
+    GET /api/strikes/trend-24h/
+    -> {"more_than_previous": bool, "last_24h": int, "prev_24h": int, "delta": int}
+
+    Note: only meaningful if ingest ran continuously over the last 48h. On prod
+    (min-instances=1) it does; minutes with no ingest simply have no rows and are
+    counted as 0.
+    """
+    cached = cache.get("trend24h")
+    if cached is not None:
+        return Response(cached)
+
+    now = timezone.now()
+    t24 = now - timedelta(hours=24)
+    t48 = now - timedelta(hours=48)
+
+    last = StrikeRollupMinute.objects.filter(bucket__gte=t24).aggregate(n=Sum("count"))["n"] or 0
+    prev = StrikeRollupMinute.objects.filter(bucket__gte=t48, bucket__lt=t24).aggregate(n=Sum("count"))["n"] or 0
+
+    out = {
+        "more_than_previous": last > prev,
+        "last_24h": last,
+        "prev_24h": prev,
+        "delta": last - prev,
+        "as_of": now.isoformat(),
+    }
+    cache.set("trend24h", out, 60)
+    return Response(out)
+
+
+@api_view(["GET"])
 def country_strikes(request):
     limit = min(int(request.GET.get("limit", 10000)), 10000)
     country = request.GET.get("country")
