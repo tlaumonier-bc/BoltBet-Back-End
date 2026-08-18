@@ -179,6 +179,10 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [],
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.AllowAny"],
+    # JSON only. The DRF Browsable API (HTML) needs templates/static that aren't
+    # available with DEBUG=false, so it 500s when a browser (Accept: text/html)
+    # opens an endpoint. This is a backend API — always return JSON.
+    "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"],
 }
 
 # ==========================================
